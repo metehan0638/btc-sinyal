@@ -1,0 +1,18 @@
+# Genel ayarlar
+symbol: BTC/USDT
+exchanges: [binance, kraken, bitstamp]   # sırayla denenir, ilk çalışan kullanılır
+since: "2017-08-17"                      # Binance BTC/USDT başlangıcı
+
+# Sinyal eşikleri (10 indikatörden kaçı aynı yönde olmalı)
+entry_threshold: 8     # AL/SAT sinyali için gereken minimum onay sayısı (6-10)
+exit_threshold: 4      # backtest: AL onayı bu sayıya düşerse pozisyondan çık
+fee: 0.001             # işlem başına %0.1 komisyon
+
+# Zaman dilimine özel indikatör ayarları (belirtilmeyenler varsayılan kalır)
+timeframes:
+  1d:
+    ema_fast: 50
+    ema_slow: 200
+  1w:
+    ema_fast: 20
+    ema_slow: 50

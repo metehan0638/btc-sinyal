@@ -1,0 +1,6 @@
+ccxt
+pandas
+numpy
+plotly
+streamlit
+pyyaml
