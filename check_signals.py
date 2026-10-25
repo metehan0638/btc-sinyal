@@ -3,7 +3,7 @@
 Kullanım:
   python check_signals.py                # normal kontrol (Görev Zamanlayıcı bunu çalıştırır)
   python check_signals.py --dry-run      # mesajları göndermeden ekrana yazar, durumu kaydetmez
-  python check_signals.py --status       # mevcut durumu Telegram'a gönderir
+  python check_signals.py --report       # raporu hemen Telegram'a gönderir (--status da çalışır)
   python check_signals.py --test         # test mesajı gönderir
   python check_signals.py --get-chat-id  # bota mesaj attıktan sonra chat ID'ni bulur
 """
@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -21,7 +22,7 @@ import yaml
 from core.backtest import position_series
 from core.consensus import build_signals
 from core.data import get_candles
-from core.indicators import compute_indicators
+from core.indicators import compute_indicators, latest_table
 from core.notifier import get_chats, load_env, send_telegram
 
 ROOT = Path(__file__).resolve().parent
@@ -31,6 +32,8 @@ TF_TR = {"1d": "Günlük", "1w": "Haftalık"}
 MIN_BARS = {"1d": 1500, "1w": 250}  # bundan kısa geçmişle hesap güvenilmez (yedek borsaya düşülmüş olabilir)
 MAX_ALERTS_PER_TF = 3  # uzun süre çalışmamışsa mesaj yağmurunu önler
 DISCLAIMER = "⚠️ Yatırım tavsiyesi değildir."
+IST = timezone(timedelta(hours=3))  # Türkiye saati
+VOTE_GROUPS = [("AL", "🟢"), ("SAT", "🔴"), ("NÖTR", "⚪"), ("Yetersiz veri", "❔")]
 
 
 def analyze(df: pd.DataFrame, tf: str, cfg: dict):
@@ -38,7 +41,7 @@ def analyze(df: pd.DataFrame, tf: str, cfg: dict):
     sig = build_signals(votes, cfg["entry_threshold"])
     pos = pd.Series(position_series(sig["bull"].values, sig["valid"].values,
                                     cfg["entry_threshold"], cfg["exit_threshold"]), index=df.index)
-    return sig, raw, pos
+    return sig, raw, pos, votes
 
 
 def find_events(pos: pd.Series, since: pd.Timestamp) -> list[tuple[pd.Timestamp, int]]:
@@ -49,14 +52,14 @@ def find_events(pos: pd.Series, since: pd.Timestamp) -> list[tuple[pd.Timestamp,
 
 
 def _state_line(tf, results) -> str:
-    _, sig, _, pos = results[tf]
+    sig, pos = results[tf][1], results[tf][3]
     last = sig.iloc[-1]
     where = "AL bölgesinde (pozisyonda)" if pos.iloc[-1] == 1 else "beklemede (nakitte)"
     return f"{TF_TR[tf]}: {where} — {int(last.bull)} AL / {int(last.bear)} SAT / {int(last.neutral)} nötr"
 
 
 def event_message(tf, ts, kind, results, cfg) -> str:
-    df, sig, raw, _ = results[tf]
+    df, sig, raw = results[tf][:3]
     s, r = sig.loc[ts], raw.loc[ts]
     other = "1w" if tf == "1d" else "1d"
     if kind == 1:
@@ -71,14 +74,34 @@ def event_message(tf, ts, kind, results, cfg) -> str:
             f"{_state_line(other, results)}\n\n{DISCLAIMER}")
 
 
-def status_message(results, first_run: bool) -> str:
-    title = "✅ Bot kuruldu, mevcut durum:" if first_run else "📊 BTC güncel durum:"
-    lines = [title, ""]
+def _indicator_block(tf: str, results, cfg: dict) -> list[str]:
+    df, sig, raw, pos, votes = results[tf]
+    last = sig.iloc[-1]
+    table = latest_table(votes, raw, cfg["timeframes"].get(tf, {}))
+    lines = [f"━━ {TF_UP[tf]} ━━",
+             f"Son mum: {df.index[-1]:%d.%m.%Y} · kapanış {df['close'].iloc[-1]:,.0f} USDT",
+             f"Sonuç: {int(last.bull)} AL · {int(last.bear)} SAT · {int(last.neutral)} NÖTR  (10 indikatörden)"]
+    if pos.iloc[-1] == 1:
+        lines.append(f"Strateji: AL bölgesinde (pozisyonda). Çıkış için AL onayı ≤{cfg['exit_threshold']} olmalı (şu an {int(last.bull)}).")
+    else:
+        lines.append(f"Strateji: beklemede (nakitte). Giriş için AL onayı ≥{cfg['entry_threshold']} gerekir (şu an {int(last.bull)}).")
+    for label, icon in VOTE_GROUPS:
+        rows = table[table["Oy"] == label]
+        if rows.empty:
+            continue
+        lines.append(f"\n{icon} {label} ({len(rows)})")
+        lines += [f"• {r['İndikatör']}: {r['Değer']}" for _, r in rows.iterrows()]
+    return lines
+
+
+def report_message(results, cfg, first_run: bool = False) -> str:
+    head = "✅ Bot kuruldu · BTC raporu" if first_run else "📊 BTC RAPORU"
+    parts = [f"{head} — {datetime.now(IST):%d.%m.%Y}", ""]
     for tf in TF_UP:
-        df = results[tf][0]
-        lines.append(f"{_state_line(tf, results)}  (son mum: {df.index[-1]:%d.%m.%Y}, kapanış {df['close'].iloc[-1]:,.0f})")
-    lines += ["", "Bundan sonra yalnızca GİRİŞ/ÇIKIŞ sinyali oluştuğunda mesaj alacaksın.", "", DISCLAIMER]
-    return "\n".join(lines)
+        parts += _indicator_block(tf, results, cfg) + [""]
+    parts.append(f"Kural: giriş AL onayı ≥{cfg['entry_threshold']}, çıkış ≤{cfg['exit_threshold']}. Giriş/çıkış olursa ayrıca uyarı gelir.")
+    parts += ["", DISCLAIMER]
+    return "\n".join(parts)
 
 
 def load_state(path: Path) -> dict:
@@ -92,16 +115,17 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
         if len(df) < MIN_BARS[tf]:
             raise RuntimeError(f"{TF_TR[tf]}: yalnızca {len(df)} mum alındı (en az {MIN_BARS[tf]} gerekir). "
                                "Binance'e erişilemiyor, yedek borsanın geçmişi kısa olabilir; sahte sinyal üretmemek için durduruldu.")
-        sig, raw, pos = analyze(df, tf, cfg)
-        results[tf] = (df, sig, raw, pos)
+        sig, raw, pos, votes = analyze(df, tf, cfg)
+        results[tf] = (df, sig, raw, pos, votes)
 
     if status_only:
-        msg = status_message(results, first_run=False)
+        msg = report_message(results, cfg)
         send(msg)
         return [msg]
 
-    state, new_state, messages, first_run = load_state(state_path), {}, [], False
-    for tf, (df, sig, raw, pos) in results.items():
+    state, messages, first_run = load_state(state_path), [], False
+    new_state = dict(state)
+    for tf, (df, sig, raw, pos, _votes) in results.items():
         seen = state.get(tf)
         if seen is None:
             first_run = True
@@ -109,8 +133,10 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
             for ts, kind in find_events(pos, pd.Timestamp(seen))[-MAX_ALERTS_PER_TF:]:
                 messages.append(event_message(tf, ts, kind, results, cfg))
         new_state[tf] = df.index[-1].isoformat()
-    if first_run:
-        messages.append(status_message(results, first_run=True))
+    today = f"{datetime.now(IST):%Y-%m-%d}"
+    if first_run or (cfg.get("daily_report", True) and state.get("last_report") != today):
+        messages.append(report_message(results, cfg, first_run=first_run))
+        new_state["last_report"] = today  # günde en fazla bir rapor
 
     for m in messages:
         send(m)
@@ -124,7 +150,7 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--status", action="store_true")
+    ap.add_argument("--status", "--report", dest="status", action="store_true")
     ap.add_argument("--test", action="store_true")
     ap.add_argument("--get-chat-id", action="store_true")
     a = ap.parse_args()
