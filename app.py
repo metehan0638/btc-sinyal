@@ -12,6 +12,7 @@ from core.backtest import run_backtest
 from core.consensus import build_signals
 from core.data import get_candles
 from core.indicators import compute_indicators, latest_table
+from core.news import IST, analyze as analyze_news
 
 CFG = yaml.safe_load(open(Path(__file__).parent / "config.yaml", encoding="utf-8"))
 TF_LABEL = {"1d": "Günlük", "1w": "Haftalık"}
@@ -37,6 +38,15 @@ with st.sidebar:
 @st.cache_data(ttl=3600, show_spinner="Mum verisi alınıyor...")
 def load_candles(symbol, tf, exchanges, since, nonce):
     return get_candles(symbol, tf, exchanges, since)
+
+
+@st.cache_data(ttl=1800, show_spinner="Haberler taranıyor...")
+def load_news(nonce):
+    import json
+    state_file = Path(__file__).parent / "state.json"
+    hist = json.loads(state_file.read_text(encoding="utf-8")).get("news_hist", {}) if state_file.exists() else {}
+    feeds = (CFG.get("news") or {}).get("feeds")
+    return analyze_news(feeds, hist)
 
 
 def analyze(tf, threshold):
@@ -83,7 +93,7 @@ st.caption(combo)
 # ---------------- zaman dilimi seçimi ----------------
 tf = st.radio("Zaman dilimi", list(TF_LABEL), format_func=TF_LABEL.get, horizontal=True)
 df, votes, raw, sig, params = data[tf]
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Güncel durum", "📈 Grafik", "🧪 Backtest", "🕘 Sinyal geçmişi"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Güncel durum", "📈 Grafik", "🧪 Backtest", "🕘 Sinyal geçmişi", "🔥 Haber / Hype"])
 
 # ---------------- sekme 1: güncel durum ----------------
 with tab1:
@@ -181,3 +191,37 @@ with tab4:
         out = ev[["Sinyal", "Kapanış", "bull", "bear", "+4 bar %", "+12 bar %"]].rename(columns={"bull": "AL oyu", "bear": "SAT oyu"})
         st.dataframe(out.sort_index(ascending=False).round(2), use_container_width=True)
         st.caption("'+N bar %': sinyal mumundan N mum sonraki fiyat değişimi (henüz oluşmadıysa boş).")
+
+# ---------------- sekme 5: haber / hype ----------------
+with tab5:
+    try:
+        articles, hype = load_news(st.session_state.nonce)
+    except Exception as e:
+        st.error(f"Haberler alınamadı: {e}")
+        articles, hype = [], None
+    if hype:
+        st.caption(f"Son 24 saatte {hype['ok']}/{hype['total']} kaynaktan {hype['n24']} haber tarandı. "
+                   + ("" if hype["use_trend"] else "Trend (olağana göre artış), bu bilgisayarda yeterli geçmiş olmadığı için gösterilmiyor; "
+                      "Telegram raporu GitHub'daki birikmiş geçmişi kullanır."))
+        if hype["failed"]:
+            st.caption("Ulaşılamayan kaynaklar: " + ", ".join(hype["failed"]))
+
+        def table(rows):
+            return pd.DataFrame([{"Konu": r["label"], "Haber (24s)": r["n"], "Kaynak": len(r["sources"]),
+                                  "Trend ×": round(r["trend"], 1) if r["trend"] is not None else None,
+                                  "Skor": round(r["score"], 1),
+                                  "Örnek başlık": f"{r['example'].title} ({r['example'].source})"} for r in rows])
+
+        c1, c2 = st.columns(2)
+        c1.subheader("Öne çıkan kategoriler")
+        c1.dataframe(table(hype["cats"]), hide_index=True, use_container_width=True)
+        c2.subheader("Öne çıkan coin / projeler")
+        c2.dataframe(table(hype["coins"]), hide_index=True, use_container_width=True)
+
+        st.subheader("Son haberler")
+        last = sorted(articles, key=lambda a: a.ts, reverse=True)[:60]
+        st.dataframe(pd.DataFrame([{"Zaman (TR)": a.ts.astimezone(IST).strftime("%d.%m %H:%M"),
+                                    "Kaynak": a.source, "Başlık": a.title,
+                                    "Kategori": ", ".join(a.cats), "Coin": ", ".join(a.coins)} for a in last]),
+                     hide_index=True, use_container_width=True)
+        st.caption("Kategori ve coin eşleştirmesi anahtar kelimeye dayanır, yanılabilir. Yatırım tavsiyesi değildir.")

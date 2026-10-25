@@ -4,6 +4,7 @@ Kullanım:
   python check_signals.py                # normal kontrol (Görev Zamanlayıcı bunu çalıştırır)
   python check_signals.py --dry-run      # mesajları göndermeden ekrana yazar, durumu kaydetmez
   python check_signals.py --report       # raporu hemen Telegram'a gönderir (--status da çalışır)
+  python check_signals.py --news         # haber/hype raporunu hemen gönderir (durumu değiştirmez)
   python check_signals.py --test         # test mesajı gönderir
   python check_signals.py --get-chat-id  # bota mesaj attıktan sonra chat ID'ni bulur
 """
@@ -23,6 +24,7 @@ from core.backtest import position_series
 from core.consensus import build_signals
 from core.data import get_candles
 from core.indicators import compute_indicators, latest_table
+from core.news import build_news_report
 from core.notifier import get_chats, load_env, send_telegram
 
 ROOT = Path(__file__).resolve().parent
@@ -108,6 +110,18 @@ def load_state(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
+def _news_message(cfg: dict, hist: dict):
+    """Haber/hype raporu. Haber tarafı hata verirse sinyal akışını bozmaz: (None, hist) döner."""
+    if not cfg.get("news_report", True):
+        return None, hist
+    try:
+        feeds = (cfg.get("news") or {}).get("feeds")
+        return build_news_report(feeds, hist)
+    except Exception as e:  # noqa: BLE001
+        print(f"[haber] rapor atlandı: {e}")
+        return None, hist
+
+
 def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetch=get_candles) -> list[str]:
     results = {}
     for tf in TF_UP:
@@ -119,9 +133,13 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
         results[tf] = (df, sig, raw, pos, votes)
 
     if status_only:
-        msg = report_message(results, cfg)
-        send(msg)
-        return [msg]
+        msgs = [report_message(results, cfg)]
+        news_msg, _ = _news_message(cfg, load_state(state_path).get("news_hist", {}))
+        if news_msg:
+            msgs.append(news_msg)
+        for m in msgs:
+            send(m)
+        return msgs
 
     state, messages, first_run = load_state(state_path), [], False
     new_state = dict(state)
@@ -137,6 +155,11 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
     if first_run or (cfg.get("daily_report", True) and state.get("last_report") != today):
         messages.append(report_message(results, cfg, first_run=first_run))
         new_state["last_report"] = today  # günde en fazla bir rapor
+    if state.get("last_news") != today:
+        news_msg, new_state["news_hist"] = _news_message(cfg, state.get("news_hist", {}))
+        if news_msg:
+            messages.append(news_msg)
+            new_state["last_news"] = today  # günde en fazla bir haber raporu
 
     for m in messages:
         send(m)
@@ -151,6 +174,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--status", "--report", dest="status", action="store_true")
+    ap.add_argument("--news", action="store_true")
     ap.add_argument("--test", action="store_true")
     ap.add_argument("--get-chat-id", action="store_true")
     a = ap.parse_args()
@@ -179,6 +203,13 @@ def main():
     if a.test:
         send("🔔 Test mesajı: BTC sinyal botu çalışıyor.")
         print("Test mesajı gönderildi.")
+        return
+    if a.news:
+        msg, _ = _news_message(cfg, load_state(STATE_FILE).get("news_hist", {}))
+        if msg:
+            send(msg)
+        else:
+            print("Haber raporu üretilemedi (kaynaklara ulaşılamadı ya da cfg'de news_report: false).")
         return
     run(cfg, send, dry_run=a.dry_run, status_only=a.status)
 
