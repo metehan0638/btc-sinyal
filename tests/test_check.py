@@ -11,6 +11,7 @@ import check_signals as cs
 cfg = yaml.safe_load(open(Path(__file__).resolve().parent.parent / "config.yaml", encoding="utf-8"))
 cfg["entry_threshold"], cfg["exit_threshold"] = 7, 4
 cfg["news_report"] = False  # bu testte ağ kullanılmasın
+cfg["fear_greed"] = False   # (Fear & Greed testleri test_sentiment.py içinde)
 df = synthetic(1800, seed=3)
 fetch = lambda sym, tf, ex, since: df if tf == "1d" else df.resample("W-MON", label="left", closed="left").agg(
     dict(open="first", high="max", low="min", close="last", volume="sum")).dropna()

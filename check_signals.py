@@ -26,6 +26,7 @@ from core.data import get_candles
 from core.indicators import compute_indicators, latest_table
 from core.news import build_news_report
 from core.notifier import get_chats, load_env, send_telegram
+from core.sentiment import align_fear_greed, fetch_fear_greed
 
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.json"
@@ -38,8 +39,9 @@ IST = timezone(timedelta(hours=3))  # Türkiye saati
 VOTE_GROUPS = [("AL", "🟢"), ("SAT", "🔴"), ("NÖTR", "⚪"), ("Yetersiz veri", "❔")]
 
 
-def analyze(df: pd.DataFrame, tf: str, cfg: dict):
-    votes, raw = compute_indicators(df, cfg["timeframes"].get(tf, {}))
+def analyze(df: pd.DataFrame, tf: str, cfg: dict, fg=None):
+    aligned = align_fear_greed(fg, df.index, tf) if fg is not None else None
+    votes, raw = compute_indicators(df, cfg["timeframes"].get(tf, {}), fg=aligned)
     sig = build_signals(votes, cfg["entry_threshold"])
     pos = pd.Series(position_series(sig["bull"].values, sig["valid"].values,
                                     cfg["entry_threshold"], cfg["exit_threshold"]), index=df.index)
@@ -66,7 +68,8 @@ def event_message(tf, ts, kind, results, cfg) -> str:
     other = "1w" if tf == "1d" else "1d"
     if kind == 1:
         head = f"🟢 BTC {TF_UP[tf]} — GİRİŞ (AL) sinyali"
-        why = f"{int(s.bull)}/10 indikatör AL dedi (eşik: {cfg['entry_threshold']})"
+        n_ind = results[tf][4].shape[1]
+        why = f"{int(s.bull)}/{n_ind} indikatör AL dedi (eşik: {cfg['entry_threshold']})"
         extra = f"\nATR tabanlı stop referansı: {r.close - 3 * r.atr:,.0f} (3×ATR)"
     else:
         head = f"🔴 BTC {TF_UP[tf]} — ÇIKIŞ sinyali"
@@ -82,7 +85,7 @@ def _indicator_block(tf: str, results, cfg: dict) -> list[str]:
     table = latest_table(votes, raw, cfg["timeframes"].get(tf, {}))
     lines = [f"━━ {TF_UP[tf]} ━━",
              f"Son mum: {df.index[-1]:%d.%m.%Y} · kapanış {df['close'].iloc[-1]:,.0f} USDT",
-             f"Sonuç: {int(last.bull)} AL · {int(last.bear)} SAT · {int(last.neutral)} NÖTR  (10 indikatörden)"]
+             f"Sonuç: {int(last.bull)} AL · {int(last.bear)} SAT · {int(last.neutral)} NÖTR  ({votes.shape[1]} indikatörden)"]
     if pos.iloc[-1] == 1:
         lines.append(f"Strateji: AL bölgesinde (pozisyonda). Çıkış için AL onayı ≤{cfg['exit_threshold']} olmalı (şu an {int(last.bull)}).")
     else:
@@ -122,14 +125,18 @@ def _news_message(cfg: dict, hist: dict):
         return None, hist
 
 
-def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetch=get_candles) -> list[str]:
+def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetch=get_candles, fetch_fg=None) -> list[str]:
+    # Fear & Greed alınamazsa burada hata verir: eksik veriyle sahte sinyal üretmektense durur, durum dosyası değişmez.
+    if fetch_fg is None and cfg.get("fear_greed", True):
+        fetch_fg = fetch_fear_greed
+    fg = fetch_fg() if fetch_fg else None
     results = {}
     for tf in TF_UP:
         df = fetch(cfg["symbol"], tf, tuple(cfg["exchanges"]), cfg["since"])
         if len(df) < MIN_BARS[tf]:
             raise RuntimeError(f"{TF_TR[tf]}: yalnızca {len(df)} mum alındı (en az {MIN_BARS[tf]} gerekir). "
                                "Binance'e erişilemiyor, yedek borsanın geçmişi kısa olabilir; sahte sinyal üretmemek için durduruldu.")
-        sig, raw, pos, votes = analyze(df, tf, cfg)
+        sig, raw, pos, votes = analyze(df, tf, cfg, fg)
         results[tf] = (df, sig, raw, pos, votes)
 
     if status_only:

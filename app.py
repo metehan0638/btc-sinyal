@@ -12,6 +12,7 @@ from core.backtest import run_backtest
 from core.consensus import build_signals
 from core.data import get_candles
 from core.indicators import compute_indicators, latest_table
+from core.sentiment import align_fear_greed, fetch_fear_greed
 from core.news import IST, analyze as analyze_news
 
 CFG = yaml.safe_load(open(Path(__file__).parent / "config.yaml", encoding="utf-8"))
@@ -26,7 +27,7 @@ if "nonce" not in st.session_state:
     st.session_state.nonce = 0
 with st.sidebar:
     st.header("Ayarlar")
-    entry = st.slider("Sinyal eşiği (10 indikatörden kaçı onaylasın)", 6, 10, CFG["entry_threshold"])
+    entry = st.slider("Sinyal eşiği (indikatörlerden kaçı onaylasın)", 6, 11, CFG["entry_threshold"])
     exit_ = st.slider("Backtest: AL onayı bu sayıya düşünce çık", 0, 6, CFG["exit_threshold"])
     fee = st.number_input("Komisyon (işlem başına)", 0.0, 0.01, float(CFG["fee"]), 0.0005, format="%.4f")
     if st.button("🔄 Veriyi yenile"):
@@ -49,10 +50,21 @@ def load_news(nonce):
     return analyze_news(feeds, hist)
 
 
+@st.cache_data(ttl=3600, show_spinner="Fear & Greed endeksi alınıyor...")
+def load_fg(nonce):
+    return fetch_fear_greed()
+
+
 def analyze(tf, threshold):
     df = load_candles(CFG["symbol"], tf, tuple(CFG["exchanges"]), CFG["since"], st.session_state.nonce)
     params = CFG["timeframes"].get(tf, {})
-    votes, raw = compute_indicators(df, params)
+    fg = None
+    if CFG.get("fear_greed", True):
+        try:
+            fg = align_fear_greed(load_fg(st.session_state.nonce), df.index, tf)
+        except Exception as e:  # panelde: uyarıp 10 indikatörle devam et
+            st.warning(f"Fear & Greed endeksi alınamadı ({e}); panel 10 indikatörle çalışıyor.")
+    votes, raw = compute_indicators(df, params, fg=fg)
     sig = build_signals(votes, threshold)
     return df, votes, raw, sig, params
 
@@ -163,7 +175,7 @@ with tab3:
 
         st.subheader("Eşik karşılaştırması (çıkış eşiği sabit)")
         rows = []
-        for th in range(6, 11):
+        for th in range(6, votes.shape[1] + 1):
             s_th = build_signals(votes, th)
             if not s_th.valid.any():
                 continue
@@ -181,7 +193,7 @@ with tab3:
 with tab4:
     ev = sig[sig.event != 0].copy()
     if ev.empty:
-        st.info(f"Seçilen eşikte ({entry}/10) hiç sinyal oluşmadı. Eşiği düşürmeyi dene.")
+        st.info(f"Seçilen eşikte ({entry}/{votes.shape[1]}) hiç sinyal oluşmadı. Eşiği düşürmeyi dene.")
     else:
         ev["Sinyal"] = ev.event.map(STATE_TXT)
         ev["Kapanış"] = df.loc[ev.index, "close"]
