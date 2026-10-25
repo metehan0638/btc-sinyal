@@ -2,7 +2,7 @@ name: BTC sinyal kontrol
 
 on:
   schedule:
-    - cron: "15 06 * * *"
+    - cron: "30 08 * * *"
   workflow_dispatch:
 
 permissions:
