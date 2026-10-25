@@ -12,7 +12,7 @@ from core.backtest import run_backtest
 from core.consensus import build_signals
 from core.data import get_candles
 from core.indicators import compute_indicators, latest_table
-from core.sentiment import align_fear_greed, fetch_fear_greed
+from core.sentiment import EMOJI as FG_EMOJI, fetch_fear_greed, summary as fg_summary
 from core.news import IST, analyze as analyze_news
 
 CFG = yaml.safe_load(open(Path(__file__).parent / "config.yaml", encoding="utf-8"))
@@ -27,7 +27,7 @@ if "nonce" not in st.session_state:
     st.session_state.nonce = 0
 with st.sidebar:
     st.header("Ayarlar")
-    entry = st.slider("Sinyal eşiği (indikatörlerden kaçı onaylasın)", 6, 11, CFG["entry_threshold"])
+    entry = st.slider("Sinyal eşiği (10 indikatörden kaçı onaylasın)", 6, 10, CFG["entry_threshold"])
     exit_ = st.slider("Backtest: AL onayı bu sayıya düşünce çık", 0, 6, CFG["exit_threshold"])
     fee = st.number_input("Komisyon (işlem başına)", 0.0, 0.01, float(CFG["fee"]), 0.0005, format="%.4f")
     if st.button("🔄 Veriyi yenile"):
@@ -58,16 +58,17 @@ def load_fg(nonce):
 def analyze(tf, threshold):
     df = load_candles(CFG["symbol"], tf, tuple(CFG["exchanges"]), CFG["since"], st.session_state.nonce)
     params = CFG["timeframes"].get(tf, {})
-    fg = None
-    if CFG.get("fear_greed", True):
-        try:
-            fg = align_fear_greed(load_fg(st.session_state.nonce), df.index, tf)
-        except Exception as e:  # panelde: uyarıp 10 indikatörle devam et
-            st.warning(f"Fear & Greed endeksi alınamadı ({e}); panel 10 indikatörle çalışıyor.")
-    votes, raw = compute_indicators(df, params, fg=fg)
+    votes, raw = compute_indicators(df, params)
     sig = build_signals(votes, threshold)
     return df, votes, raw, sig, params
 
+
+fg_series = None
+if CFG.get("fear_greed", True):
+    try:
+        fg_series = load_fg(st.session_state.nonce)
+    except Exception as e:  # bilgi amaçlı: alınamazsa panel yine çalışır
+        st.info(f"Fear & Greed endeksi alınamadı ({e}). Sinyaller etkilenmez.")
 
 try:
     data = {tf: analyze(tf, entry) for tf in TF_LABEL}
@@ -78,7 +79,7 @@ except Exception as e:
 
 # ---------------- başlık + özet ----------------
 st.title(f"₿ {CFG['symbol']} — Uzun Vade Sinyal Paneli")
-cols = st.columns(3)
+cols = st.columns(4)
 for col, tf in zip(cols[:2], TF_LABEL):
     df, votes, raw, sig, _ = data[tf]
     last = sig.iloc[-1]
@@ -100,6 +101,12 @@ elif sw == -1:
 else:
     combo = "⚪ Net uyum yok, beklemede"
 cols[2].metric("Birleşik yorum", combo.split(":")[0][2:].strip())
+if fg_series is not None:
+    fgi = fg_summary(fg_series)
+    cols[3].metric("Fear & Greed (bilgi)", f"{fgi['value']:.0f} · {fgi['label']}",
+                   f"dün {fgi['yesterday']:.0f}" if fgi["yesterday"] is not None else None, delta_color="off")
+else:
+    cols[3].metric("Fear & Greed (bilgi)", "-")
 st.caption(combo)
 
 # ---------------- zaman dilimi seçimi ----------------
@@ -237,3 +244,19 @@ with tab5:
                                     "Kategori": ", ".join(a.cats), "Coin": ", ".join(a.coins)} for a in last]),
                      hide_index=True, use_container_width=True)
         st.caption("Kategori ve coin eşleştirmesi anahtar kelimeye dayanır, yanılabilir. Yatırım tavsiyesi değildir.")
+
+# ---------------- Fear & Greed (bilgi amaçlı, sinyale dahil değil) ----------------
+with tab1:
+    if fg_series is not None:
+        st.subheader("Piyasa duyarlılığı: Fear & Greed")
+        fgi = fg_summary(fg_series)
+        st.write(f"{FG_EMOJI.get(fgi['label'], '')} **{fgi['value']:.0f} — {fgi['label']}** "
+                 + " · ".join(f"{n} {fgi[k]:.0f}" for n, k in (("dün", "yesterday"), ("7 gün önce", "week"), ("30 gün önce", "month")) if fgi[k] is not None))
+        recent = fg_series.loc[fg_series.index[-1] - pd.DateOffset(years=1):]
+        f3 = go.Figure(go.Scatter(x=recent.index, y=recent.values, mode="lines", name="Fear & Greed"))
+        for y in (25, 47, 55, 75):
+            f3.add_hline(y=y, line_dash="dot", line_width=1)
+        f3.update_layout(height=280, yaxis=dict(range=[0, 100], title="0 = aşırı korku · 100 = aşırı açgözlülük"),
+                         margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
+        st.plotly_chart(f3, use_container_width=True)
+        st.caption("Bilgi amaçlıdır; AL/SAT sinyaline dahil değildir. Kaynak: alternative.me")

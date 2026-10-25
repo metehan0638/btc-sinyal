@@ -26,7 +26,8 @@ from core.data import get_candles
 from core.indicators import compute_indicators, latest_table
 from core.news import build_news_report
 from core.notifier import get_chats, load_env, send_telegram
-from core.sentiment import align_fear_greed, fetch_fear_greed
+from core import sentiment
+from core.sentiment import fetch_fear_greed
 
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.json"
@@ -39,9 +40,8 @@ IST = timezone(timedelta(hours=3))  # Türkiye saati
 VOTE_GROUPS = [("AL", "🟢"), ("SAT", "🔴"), ("NÖTR", "⚪"), ("Yetersiz veri", "❔")]
 
 
-def analyze(df: pd.DataFrame, tf: str, cfg: dict, fg=None):
-    aligned = align_fear_greed(fg, df.index, tf) if fg is not None else None
-    votes, raw = compute_indicators(df, cfg["timeframes"].get(tf, {}), fg=aligned)
+def analyze(df: pd.DataFrame, tf: str, cfg: dict):
+    votes, raw = compute_indicators(df, cfg["timeframes"].get(tf, {}))
     sig = build_signals(votes, cfg["entry_threshold"])
     pos = pd.Series(position_series(sig["bull"].values, sig["valid"].values,
                                     cfg["entry_threshold"], cfg["exit_threshold"]), index=df.index)
@@ -99,11 +99,13 @@ def _indicator_block(tf: str, results, cfg: dict) -> list[str]:
     return lines
 
 
-def report_message(results, cfg, first_run: bool = False) -> str:
+def report_message(results, cfg, first_run: bool = False, fg_info: dict | None = None) -> str:
     head = "✅ Bot kuruldu · BTC raporu" if first_run else "📊 BTC RAPORU"
     parts = [f"{head} — {datetime.now(IST):%d.%m.%Y}", ""]
     for tf in TF_UP:
         parts += _indicator_block(tf, results, cfg) + [""]
+    if fg_info:
+        parts += sentiment.lines(fg_info) + [""]
     parts.append(f"Kural: giriş AL onayı ≥{cfg['entry_threshold']}, çıkış ≤{cfg['exit_threshold']}. Giriş/çıkış olursa ayrıca uyarı gelir.")
     parts += ["", DISCLAIMER]
     return "\n".join(parts)
@@ -126,21 +128,24 @@ def _news_message(cfg: dict, hist: dict):
 
 
 def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetch=get_candles, fetch_fg=None) -> list[str]:
-    # Fear & Greed alınamazsa burada hata verir: eksik veriyle sahte sinyal üretmektense durur, durum dosyası değişmez.
-    if fetch_fg is None and cfg.get("fear_greed", True):
-        fetch_fg = fetch_fear_greed
-    fg = fetch_fg() if fetch_fg else None
+    # Fear & Greed yalnızca bilgi amaçlı: alınamazsa rapor o satır olmadan gider, sinyal akışı etkilenmez.
+    fg_info = None
+    if cfg.get("fear_greed", True):
+        try:
+            fg_info = sentiment.summary((fetch_fg or fetch_fear_greed)())
+        except Exception as e:  # noqa: BLE001
+            print(f"[fear&greed] atlandı: {e}")
     results = {}
     for tf in TF_UP:
         df = fetch(cfg["symbol"], tf, tuple(cfg["exchanges"]), cfg["since"])
         if len(df) < MIN_BARS[tf]:
             raise RuntimeError(f"{TF_TR[tf]}: yalnızca {len(df)} mum alındı (en az {MIN_BARS[tf]} gerekir). "
                                "Binance'e erişilemiyor, yedek borsanın geçmişi kısa olabilir; sahte sinyal üretmemek için durduruldu.")
-        sig, raw, pos, votes = analyze(df, tf, cfg, fg)
+        sig, raw, pos, votes = analyze(df, tf, cfg)
         results[tf] = (df, sig, raw, pos, votes)
 
     if status_only:
-        msgs = [report_message(results, cfg)]
+        msgs = [report_message(results, cfg, fg_info=fg_info)]
         news_msg, _ = _news_message(cfg, load_state(state_path).get("news_hist", {}))
         if news_msg:
             msgs.append(news_msg)
@@ -160,7 +165,7 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
         new_state[tf] = df.index[-1].isoformat()
     today = f"{datetime.now(IST):%Y-%m-%d}"
     if first_run or (cfg.get("daily_report", True) and state.get("last_report") != today):
-        messages.append(report_message(results, cfg, first_run=first_run))
+        messages.append(report_message(results, cfg, first_run=first_run, fg_info=fg_info))
         new_state["last_report"] = today  # günde en fazla bir rapor
     if state.get("last_news") != today:
         news_msg, new_state["news_hist"] = _news_message(cfg, state.get("news_hist", {}))
