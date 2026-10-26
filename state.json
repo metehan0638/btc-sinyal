@@ -1,7 +1,7 @@
 {
-  "1d": "2026-10-24T00:00:00+00:00",
-  "1w": "2026-10-12T00:00:00+00:00",
-  "last_report": "2026-10-25",
+  "1d": "2026-10-25T00:00:00+00:00",
+  "1w": "2026-10-19T00:00:00+00:00",
+  "last_report": "2026-10-26",
   "news_hist": {
     "2026-10-25": {
       "_total": 26,
@@ -75,7 +75,24 @@
       "cat:DeFi": 1,
       "coin:UNI": 1,
       "coin:ETH": 1
+    },
+    "2026-10-26": {
+      "_total": 69,
+      "cat:Stablecoin / \u00d6deme": 6,
+      "cat:Reg\u00fclasyon / Hukuk": 1,
+      "cat:Yapay Zek\u00e2": 7,
+      "cat:Borsa / Platform": 6,
+      "coin:BTC": 35,
+      "cat:Makro / Ekonomi": 7,
+      "cat:Fiyat Hareketi": 9,
+      "cat:G\u00fcvenlik / Hack": 6,
+      "cat:ETF / Kurumsal": 8,
+      "cat:RWA / Tokenizasyon": 3,
+      "coin:XRP": 4,
+      "coin:SOL": 3,
+      "coin:ETH": 6,
+      "coin:ADA": 1
     }
   },
-  "last_news": "2026-10-25"
+  "last_news": "2026-10-26"
 }
