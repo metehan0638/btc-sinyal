@@ -1,5 +1,5 @@
 """Crypto Fear & Greed Index (alternative.me): ücretsiz, anahtar gerekmez. 2018-02-01'den beri günlük veri.
-Sinyal mantığı (ters/contrarian): korku -> AL oyu, açgözlülük -> SAT oyu."""
+BİLGİ AMAÇLIDIR: AL/SAT konsensüsüne dahil edilmez, yalnızca rapor ve panelde gösterilir."""
 from __future__ import annotations
 
 import json
@@ -13,6 +13,7 @@ FNG_URL = "https://api.alternative.me/fng/?limit=0&format=json"
 CACHE_FILE = Path(__file__).resolve().parent.parent / "cache" / "fear_greed.csv"
 UA = "Mozilla/5.0 (compatible; BTCSinyalBot/1.0)"
 MAX_STALE_DAYS = 3  # önbellek yedeği en fazla bu kadar eski olabilir
+EMOJI = {"Aşırı korku": "😱", "Korku": "😨", "Nötr": "😐", "Açgözlülük": "😏", "Aşırı açgözlülük": "🤑"}
 
 
 def classify(v: float) -> str:
@@ -40,7 +41,7 @@ def _parse(payload: dict) -> pd.Series:
 
 def fetch_fear_greed(url: str = FNG_URL, attempts: int = 3, timeout: int = 20) -> pd.Series:
     """Günlük endeks serisi (index = UTC gün başı, değer 0-100). Hata olursa bekleyip tekrar dener;
-    olmazsa en fazla 3 gün eski önbelleği kullanır; o da yoksa hata verir (yanlış sinyal üretmemek için)."""
+    olmazsa en fazla 3 gün eski önbelleği kullanır; o da yoksa hata verir."""
     last = None
     for i in range(attempts):
         try:
@@ -66,11 +67,21 @@ def fetch_fear_greed(url: str = FNG_URL, attempts: int = 3, timeout: int = 20) -
     raise RuntimeError(f"Fear & Greed endeksi alınamadı: {last}")
 
 
-def align_fear_greed(fg: pd.Series, index: pd.DatetimeIndex, tf: str) -> pd.Series:
-    """Her mum için, o mum KAPANMADAN önce yayımlanmış son endeks değerini eşler (ileriye bakma yok):
-    günlük mum -> mumun açıldığı günün değeri; haftalık mum -> haftanın son gününün (açılış+6 gün) değeri."""
-    offset = {"1d": 0, "1w": 6}[tf]
-    keys = index.normalize() + pd.Timedelta(days=offset)
-    full_idx = pd.date_range(fg.index.min(), max(fg.index.max(), keys.max()), freq="D")
-    full = fg.reindex(full_idx).ffill(limit=3)  # küçük veri boşluklarını (en çok 3 gün) doldur
-    return pd.Series(full.reindex(keys).to_numpy(), index=index, name="fear_greed")
+def summary(fg: pd.Series) -> dict:
+    """Güncel değer ve karşılaştırma değerleri (dün, 7/30 gün önce)."""
+    s = fg.dropna()
+    d = s.index[-1]
+    ago = lambda n: float(s.loc[d - pd.Timedelta(days=n)]) if (d - pd.Timedelta(days=n)) in s.index else None
+    v = float(s.iloc[-1])
+    return dict(date=d, value=v, label=classify(v), yesterday=ago(1), week=ago(7), month=ago(30))
+
+
+def lines(info: dict) -> list[str]:
+    """Telegram raporu için satırlar."""
+    emo = EMOJI.get(info["label"], "")
+    out = ["━━ PİYASA DUYARLILIĞI ━━", f"{emo} Fear & Greed: {info['value']:.0f} — {info['label']}"]
+    prev = [f"{n} {info[k]:.0f}" for n, k in (("dün", "yesterday"), ("7 gün önce", "week"), ("30 gün önce", "month")) if info[k] is not None]
+    if prev:
+        out.append("   " + " · ".join(prev))
+    out.append("   (bilgi amaçlı, AL/SAT sinyaline dahil değil)")
+    return out

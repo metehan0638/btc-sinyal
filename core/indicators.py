@@ -17,7 +17,6 @@ DEFAULTS = dict(
     obv_ema=20,
     mfi_period=14, mfi_band=(45, 55),
     atr_period=14,
-    fg_band=(47, 54),   # Fear&Greed: <47 korku -> AL, >54 açgözlülük -> SAT, arası NÖTR
 )
 
 # (anahtar, görünen ad, kategori)
@@ -32,7 +31,6 @@ INDICATORS = [
     ("bollinger", "Bollinger orta bant", "Volatilite"),
     ("obv", "OBV", "Hacim"),
     ("mfi", "MFI", "Hacim"),
-    ("feargreed", "Fear & Greed (ters)", "Duyarlılık"),  # yalnızca fg verilirse hesaplanır
 ]
 
 
@@ -99,9 +97,8 @@ def _vote(bull, bear, *sources):
 
 
 # ---------- ana fonksiyon ----------
-def compute_indicators(df: pd.DataFrame, params: dict | None = None, fg: pd.Series | None = None):
-    """Döndürür: (votes DataFrame [10 sütun; fg verilirse 11], raw DataFrame [ham indikatör değerleri]).
-    fg: mum indeksiyle hizalanmış Fear & Greed serisi (bkz. core.sentiment.align_fear_greed)."""
+def compute_indicators(df: pd.DataFrame, params: dict | None = None):
+    """Döndürür: (votes DataFrame [10 sütun], raw DataFrame [ham indikatör değerleri])."""
     p = {**DEFAULTS, **(params or {})}
     c, h, l, v = df["close"], df["high"], df["low"], df["volume"]
     raw = pd.DataFrame(index=df.index)
@@ -175,14 +172,8 @@ def compute_indicators(df: pd.DataFrame, params: dict | None = None, fg: pd.Seri
     raw["mfi"] = 100 - 100 / (1 + pos / neg)
     votes["mfi"] = _vote(raw.mfi > hi, raw.mfi < lo, raw.mfi)
 
-    # 11) Fear & Greed (ters): korku -> AL, açgözlülük -> SAT
-    if fg is not None:
-        lo, hi = p["fg_band"]
-        raw["fear_greed"] = fg.reindex(df.index)
-        votes["feargreed"] = _vote(raw.fear_greed < lo, raw.fear_greed > hi, raw.fear_greed)
-
     raw["atr"] = atr(df, p["atr_period"])
-    return votes[[k for k, _, _ in INDICATORS if k in votes.columns]], raw
+    return votes[[k for k, _, _ in INDICATORS]], raw
 
 
 def latest_table(votes: pd.DataFrame, raw: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
@@ -201,10 +192,7 @@ def latest_table(votes: pd.DataFrame, raw: pd.DataFrame, params: dict | None = N
         "obv": f"OBV {'>' if r.obv > r.obv_ema else '<'} OBV-EMA{p['obv_ema']}",
         "mfi": f"MFI={r.mfi:.1f}",
     }
-    if "fear_greed" in raw.columns:
-        from core.sentiment import classify
-        txt["feargreed"] = f"Endeks={r.fear_greed:.0f} ({classify(r.fear_greed)})"
     label = {1.0: "AL", -1.0: "SAT", 0.0: "NÖTR"}
     rows = [dict(İndikatör=name, Kategori=cat, Değer=txt[k] if pd.notna(vt[k]) else "-",
-                 Oy=label.get(vt[k], "Yetersiz veri")) for k, name, cat in INDICATORS if k in votes.columns]
+                 Oy=label.get(vt[k], "Yetersiz veri")) for k, name, cat in INDICATORS]
     return pd.DataFrame(rows)
