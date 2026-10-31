@@ -215,5 +215,7 @@
   },
   "last_news": "2026-10-31",
   "zone_1d": "normal",
-  "zone_1w": "normal"
+  "zone_1w": "normal",
+  "cross_1d": "2026-09-08T00:00:00+00:00",
+  "cross_1w": "2024-01-08T00:00:00+00:00"
 }
