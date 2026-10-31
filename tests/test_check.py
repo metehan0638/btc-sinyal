@@ -23,13 +23,16 @@ with tempfile.TemporaryDirectory() as tmp:
     # 1) ilk çalışma: yeni düzen raporu + bölge durumu kaydedilir
     m1 = cs.run(cfg, sent.append, state_path=st, fetch=fetch, fetch_fg=lambda: fg)
     assert len(m1) == 1 and "yeni düzene" in m1[0] and st.exists()
-    for k in ("GÜNLÜK", "HAFTALIK", "Genel:", "göstergeden", "RSI(14)", "Fear & Greed", "Nasıl okunur", "tavsiyesi değildir"):
+    for k in ("GÜNLÜK", "HAFTALIK", "Genel:", "göstergeden", "RSI(14)", "Fear & Greed", "Nasıl okunur", "tavsiyesi değildir",
+              "Trend yönü:", "Son kesişim:"):
         assert k in m1[0], f"rapor eksik: {k}"
     assert m1[0].count("Fear & Greed") == 1, "Fear & Greed yalnızca günlük blokta olmalı"
     for bad in ("AL sinyali", "SAT sinyali", "GİRİŞ", "ÇIKIŞ", "pozisyon", "backtest"):
         assert bad not in m1[0], f"eski al-sat dili kalmış: {bad}"
     s = json.loads(st.read_text(encoding="utf-8"))
     assert s["zone_1d"] in cs.ZONE_TEXT and s["zone_1w"] in cs.ZONE_TEXT and s["last_report"]
+    assert "cross_1d" in s and "cross_1w" in s, "kesişim durumu kaydedilmeli (ilk çalışmada uyarı olmadan)"
+    assert m1[0].count("Trend yönü:") == 2 and "GOLDEN CROSS" not in m1[0] and "DEAD CROSS" not in m1[0], "ilk çalışmada geçmiş kesişim için uyarı gelmemeli"
     # 2) aynı gün tekrar: rapor yok
     assert cs.run(cfg, sent.append, state_path=st, fetch=fetch, fetch_fg=lambda: fg) == []
     # 3) yeni gün: tek rapor; bölge değiştiyse "Önceki rapor" satırı görünür
@@ -40,6 +43,20 @@ with tempfile.TemporaryDirectory() as tmp:
     assert cs.run(cfg, sent.append, state_path=st, fetch=fetch, fetch_fg=lambda: fg) == []
     # 3b) --report her zaman gönderir
     assert "RAPORU" in cs.run(cfg, sent.append, status_only=True, state_path=st, fetch=fetch, fetch_fg=lambda: fg)[0]
+    # 3c) yeni kesişim olursa ayrı uyarı: durumu bir önceki kesişimden öncesine al -> yalnızca sonraki kesişim(ler) bildirilir, bir kez
+    from core.zones import compute_metrics, cross_events
+    evs = cross_events(compute_metrics(df, cfg["timeframes"]["1d"]))
+    assert len(evs) >= 2, "sentetik veride yeterli kesişim yok, test verisini değiştir"
+    s = json.loads(st.read_text(encoding="utf-8")); s["cross_1d"] = evs[-2][0].isoformat(); st.write_text(json.dumps(s), encoding="utf-8")
+    ca = cs.run(cfg, sent.append, state_path=st, fetch=fetch, fetch_fg=lambda: fg)
+    last_ts, last_kind = evs[-1]
+    assert len(ca) == 1 and ("GOLDEN CROSS" if last_kind == 1 else "DEAD CROSS") in ca[0] and f"{last_ts:%d.%m.%Y}" in ca[0], ca
+    assert "Şu anki fiyat seviyesi" in ca[0] and "tavsiyesi değildir" in ca[0] and "gecikmeli" in ca[0]
+    assert json.loads(st.read_text(encoding="utf-8"))["cross_1d"] == last_ts.isoformat()
+    assert cs.run(cfg, sent.append, state_path=st, fetch=fetch, fetch_fg=lambda: fg) == [], "aynı kesişim iki kez bildirilmemeli"
+    # kapatılınca uyarı gelmez
+    s["cross_1d"] = evs[-2][0].isoformat(); st.write_text(json.dumps(s), encoding="utf-8")
+    assert cs.run({**cfg, "cross_alerts": False}, sent.append, state_path=st, fetch=fetch, fetch_fg=lambda: fg) == []
     # 4) gönderim hatasında durum kaydedilmemeli
     s = json.loads(st.read_text(encoding="utf-8")); s["last_report"] = "2000-01-01"; st.write_text(json.dumps(s), encoding="utf-8")
     def boom(_): raise RuntimeError("ağ yok")

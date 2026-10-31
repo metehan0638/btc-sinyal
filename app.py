@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 from core.data import get_candles
 from core.news import IST, analyze as analyze_news
 from core.sentiment import EMOJI as FG_EMOJI, fetch_fear_greed, summary as fg_summary
-from core.zones import DEFAULT_PARAMS, METRIC_KEYS, MIN_BARS, ZONE_TEXT, compute_metrics, latest_rows, summarize, zones_for
+from core.zones import METRIC_KEYS, MIN_BARS, TREND_TEXT, ZONE_TEXT, compute_metrics, latest_rows, summarize, trend_info, zones_for
 
 CFG = yaml.safe_load(open(Path(__file__).parent / "config.yaml", encoding="utf-8"))
 TF_LABEL = {"1d": "Günlük", "1w": "Haftalık"}
@@ -65,7 +65,7 @@ def analyze(tf):
     params = CFG["timeframes"].get(tf, {})
     raw = compute_metrics(df, params)
     rows = latest_rows(raw, params, tf, fg_info if tf == "1d" else None)
-    return df, raw, rows, summarize(rows, ZONE_RATIO), params
+    return df, raw, rows, summarize(rows, ZONE_RATIO), params, trend_info(raw, params, tf)
 
 
 try:
@@ -79,7 +79,7 @@ except Exception as e:
 st.title(f"₿ {CFG['symbol']} — Dip / Şişkinlik Paneli")
 cols = st.columns(3)
 for col, tf in zip(cols[:2], TF_LABEL):
-    df, raw, rows, summ, _ = data[tf]
+    df, raw, rows, summ, _, _trend = data[tf]
     icon, label = ZONE_TEXT[summ["zone"]]
     col.metric(f"{TF_LABEL[tf]} ({df.index[-1].date()} kapanışı)", f"{icon} {label}",
                f"{summ['cheap']} ucuz · {summ['normal']} normal · {summ['hot']} şişmiş", delta_color="off")
@@ -91,6 +91,17 @@ else:
 st.caption("🟢 = fiyat ucuz/dip tarafında (şişmiş değil) · 🔴 = şişmiş tarafında. "
            f"Genel karar için göstergelerin en az %{ZONE_RATIO * 100:.0f}'i aynı tarafta olmalı.")
 
+# trend yönü (golden/dead cross): ucuz/şişmiş puanından bağımsız, olumlu/olumsuz ekseni
+tcols = st.columns(3)
+for col, tf in zip(tcols[:2], TF_LABEL):
+    trend = data[tf][5]
+    if trend["state"] == trend["state"]:
+        t_icon, t_label = TREND_TEXT[trend["state"]]
+        col.metric(f"{TF_LABEL[tf]} trend yönü (golden/dead cross)", f"{t_icon} {t_label}",
+                   trend["last_text"].replace("Son kesişim: ", "son kesişim ") + (" · 🆕 yeni" if trend["fresh"] else ""), delta_color="off")
+    else:
+        col.metric(f"{TF_LABEL[tf]} trend yönü (golden/dead cross)", "❔ Yetersiz veri")
+
 for tf_, (df_, *_rest) in data.items():
     if len(df_) < MIN_BARS[tf_]:
         st.warning(f"{TF_LABEL[tf_]}: yalnızca {len(df_)} mum alındı (en az {MIN_BARS[tf_]} beklenir). "
@@ -98,7 +109,7 @@ for tf_, (df_, *_rest) in data.items():
 
 # ---------------- zaman dilimi seçimi ----------------
 tf = st.radio("Zaman dilimi", list(TF_LABEL), format_func=TF_LABEL.get, horizontal=True)
-df, raw, rows, summ, params = data[tf]
+df, raw, rows, summ, params, trend = data[tf]
 tab1, tab2, tab3 = st.tabs(["📊 Güncel durum", "📈 Grafik", "🔥 Haber / Hype"])
 
 # ---------------- sekme 1: güncel durum ----------------
@@ -106,6 +117,10 @@ with tab1:
     icon, label = ZONE_TEXT[summ["zone"]]
     st.subheader(f"{TF_LABEL[tf]}: {icon} {label}")
     st.caption(f"{summ['n']} göstergeden {summ['cheap']} tanesi ucuz, {summ['normal']} normal, {summ['hot']} şişmiş bölgede.")
+    if trend["state"] == trend["state"]:
+        t_icon, t_label = TREND_TEXT[trend["state"]]
+        st.write(f"**Trend yönü:** {t_icon} {t_label} — {trend['text']}" + (" 🆕 yeni kesişim" if trend["fresh"] else ""))
+        st.caption(trend["last_text"] + ". Kesişim gecikmeli bir onay sinyalidir; ucuz/şişmiş puanına dahil değildir.")
 
     def color(v):
         return {"🟢": "background-color:#1b5e20;color:white", "🔴": "background-color:#b71c1c;color:white",
@@ -144,13 +159,19 @@ with tab2:
     cut = {"Tümü": None, "Son 4 yıl": 4, "Son 2 yıl": 2, "Son 1 yıl": 1}[span]
     start = df.index[-1] - pd.DateOffset(years=cut) if cut else df.index[0]
     d, r = df.loc[start:], raw.loc[start:]
-    ma_n = {**DEFAULT_PARAMS, **{k: v for k, v in params.items() if k != "zones"}}["ma_long"]
-    sma = raw["close"].rolling(ma_n).mean().loc[start:]
+    fast_n, slow_n = trend["fast"], trend["slow"]
     cheap, hot = zones_for(params)[key]
+    events = r[r["cross_event"] != 0]
+    golden, dead = events[events["cross_event"] > 0], events[events["cross_event"] < 0]
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.04)
     fig.add_trace(go.Candlestick(x=d.index, open=d.open, high=d.high, low=d.low, close=d.close, name="BTC"), 1, 1)
-    fig.add_trace(go.Scatter(x=sma.index, y=sma, name=f"{ma_n} ortalama", line=dict(width=1.3)), 1, 1)
+    fig.add_trace(go.Scatter(x=r.index, y=r["ma_fast"], name=f"SMA{fast_n}", line=dict(width=1.3)), 1, 1)
+    fig.add_trace(go.Scatter(x=r.index, y=r["ma_slow"], name=f"SMA{slow_n}", line=dict(width=1.3)), 1, 1)
+    fig.add_trace(go.Scatter(x=golden.index, y=golden["ma_slow"], mode="markers", name="Golden cross",
+                             marker=dict(symbol="triangle-up", size=13, color="#00c853")), 1, 1)
+    fig.add_trace(go.Scatter(x=dead.index, y=dead["ma_slow"], mode="markers", name="Dead cross",
+                             marker=dict(symbol="triangle-down", size=13, color="#ff1744")), 1, 1)
     fig.add_trace(go.Scatter(x=r.index, y=r[key], name=names[key], line=dict(width=1.5)), 2, 1)
     fig.add_hline(y=cheap, line_dash="dot", line_color="#00c853", row=2, col=1)
     fig.add_hline(y=hot, line_dash="dot", line_color="#ff1744", row=2, col=1)

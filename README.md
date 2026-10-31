@@ -1,7 +1,7 @@
 # BTC Dip / Şişkinlik Raporu
 
 Bitcoin fiyatının **dipte mi, şişmiş mi** olduğunu birkaç göstergeyle ölçen ve her gün Telegram'a rapor gönderen bir araç.
-**AL/SAT sinyali üretmez, backtest yapmaz.** Amaç: fiyatın ucuz tarafta olup olmadığını, şişmediğini görmek.
+**AL/SAT emri vermez, backtest yapmaz.** Amaç: fiyatın ucuz tarafta olup olmadığını, şişmediğini görmek.
 
 Mantık basit: her gösterge için değer, "ucuz / normal / şişmiş" bölgelerinden birine yerleştirilir.
 
@@ -19,12 +19,30 @@ Mantık basit: her gösterge için değer, "ucuz / normal / şişmiş" bölgeler
 Genel karar: göstergelerin **en az yarısı** ucuz bölgedeyse `🟢 DİP BÖLGESİ`, en az yarısı şişmiş bölgedeyse `🔴 ŞİŞMİŞ BÖLGE`, değilse `⚪ NORMAL`.
 Günlük ve haftalık mumlar ayrı değerlendirilir. Bu eşikler **başlangıç değerleridir**; `config.yaml` içinden değiştirilebilir.
 
+## Trend yönü: golden / dead cross
+
+Ucuz/şişmiş puanından **ayrı** bir eksendir: fiyatın *nerede* olduğunu değil, trendin *hangi yönde* olduğunu gösterir.
+Hızlı SMA yavaş SMA'yı yukarı keserse **golden cross** (🟢 olumlu), aşağı keserse **dead cross** (🔴 olumsuz) sayılır;
+tersi bir kesişim olana kadar yapı korunur. Raporda her zaman diliminin altında "Trend yönü" satırı ve son kesişim tarihi görünür.
+
+| Zaman dilimi | Hızlı / yavaş SMA |
+|---|---|
+| Günlük | 50 / 200 |
+| Haftalık | 50 / 200 |
+
+Periyotlar `config.yaml`'daki `cross: [hızlı, yavaş]` ile değiştirilebilir. Haftalık 50/200 çok yavaştır (BTC'de yalnızca birkaç kez kesişti);
+daha sık sinyal için `[20, 50]` denenebilir. Yeni bir kesişim olunca raporun dışında **ayrıca uyarı** gelir (`cross_alerts: false` ile kapatılır).
+
+> Kesişim gecikmeli bir onay sinyalidir: ortalamalar geçmiş fiyattan hesaplandığı için fiyat çoğu zaman o yönde zaten haftalardır hareket etmiştir.
+> Bitcoin'de ortalamalar sık kesiştiği için yanlış alarmlar da olur. Dip bölgesi + dead cross "fiyat ucuz ama trend hâlâ aşağı", dip bölgesi + golden cross "fiyat ucuz ve trend dönüyor" gibi okunabilir.
+
 > **Sınırlar:** Aşırı satım, dipte olunduğunu garanti etmez; düşüş trendinde göstergeler uzun süre ucuz bölgede kalabilir.
 > "Şişmiş değil" de "ucuz" demek değildir. Rapor bir bağlam bilgisidir, tek başına karar dayanağı değildir. Yatırım tavsiyesi değildir.
 
 ## Raporda ne var?
 
-- Günlük ve haftalık: genel bölge, her göstergenin değeri ve hangi bölgede olduğu, bir önceki rapora göre bölge değişimi
+- Günlük ve haftalık: genel bölge, trend yönü (golden/dead cross), her göstergenin değeri ve bölgesi, bir önceki rapora göre bölge değişimi
+- Yeni golden/dead cross olunca ayrı bir uyarı mesajı
 - Fear & Greed (günlük puana dahil) ve haber/hype raporu (kategori ve coin bazında öne çıkan konular)
 
 ## Kurulum

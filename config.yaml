@@ -11,10 +11,17 @@ zone_ratio: 0.5
 # Varsayılanlar: rsi [30,70] · stochrsi [20,80] · bollinger [0.10,0.90] · mfi [20,80]
 #                ma_ratio [0.85,2.0] · drawdown [-50,-10] · fear_greed [24,75]
 # Bunlar başlangıç değerleridir; kendi görüşüne göre değiştirebilirsin.
+# cross: [hızlı, yavaş] SMA periyotları. Hızlı yavaşı yukarı keserse golden cross (olumlu), aşağı keserse dead cross (olumsuz).
+# Bu, ucuz/şişmiş puanına GİRMEZ; raporda ayrı "Trend yönü" satırı olarak görünür.
+# Haftalıkta 50/200 çok yavaştır (BTC'de yalnızca birkaç kez kesişti); daha sık sinyal için [20, 50] denenebilir.
+cross_alerts: true          # yeni golden/dead cross olunca ayrıca anlık uyarı gönder
+
 timeframes:
   1d:
     ma_long: 200            # fiyat / 200 günlük ortalama
+    cross: [50, 200]        # klasik golden/dead cross
   1w:
     ma_long: 200            # fiyat / 200 haftalık ortalama
+    cross: [50, 200]
     zones:
       ma_ratio: [1.2, 3.5]  # haftalık 200 ortalamaya göre ölçek farklıdır

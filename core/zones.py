@@ -12,7 +12,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-DEFAULT_PARAMS = dict(rsi_period=14, stoch=(14, 3, 3), bb_period=20, bb_std=2.0, mfi_period=14, ma_long=200)
+DEFAULT_PARAMS = dict(rsi_period=14, stoch=(14, 3, 3), bb_period=20, bb_std=2.0, mfi_period=14, ma_long=200,
+                      cross=(50, 200))  # cross: golden/dead cross için (hızlı, yavaş) SMA periyotları
 
 # gösterge -> (ucuz eşiği, şişmiş eşiği): değer <= ucuz eşiği ise UCUZ, değer >= şişmiş eşiği ise ŞİŞMİŞ
 DEFAULT_ZONES = {
@@ -39,6 +40,10 @@ NOTES = {
 MIN_BARS = {"1d": 1500, "1w": 250}
 METRIC_KEYS = ["rsi", "stochrsi", "bollinger", "mfi", "ma_ratio", "drawdown"]
 UNIT = {"1d": "günlük", "1w": "haftalık"}
+BAR_NAME = {"1d": "gün", "1w": "hafta"}
+FRESH_BARS = {"1d": 14, "1w": 4}  # son kesişim bu kadar mum içindeyse "yeni" sayılır
+# Trend yönü (golden/dead cross): ucuz/şişmiş ekseninden BAĞIMSIZ, olumlu/olumsuz ekseni
+TREND_TEXT = {1: ("🟢", "OLUMLU"), -1: ("🔴", "OLUMSUZ"), 0: ("⚪", "NÖTR")}
 ZONE_TEXT = {"dip": ("🟢", "DİP BÖLGESİ"), "normal": ("⚪", "NORMAL"),
              "hot": ("🔴", "ŞİŞMİŞ BÖLGE"), "nodata": ("❔", "YETERSİZ VERİ")}
 
@@ -86,6 +91,19 @@ def compute_metrics(df: pd.DataFrame, params: dict | None = None) -> pd.DataFram
 
     raw["ath"] = h.cummax()
     raw["drawdown"] = (c / raw["ath"] - 1) * 100
+
+    # golden / dead cross: hızlı SMA yavaş SMA'yı yukarı keserse +1 (golden), aşağı keserse -1 (dead)
+    fast_n, slow_n = p["cross"]
+    if not fast_n < slow_n:
+        raise ValueError(f"cross periyotları hatalı: hızlı ({fast_n}) yavaştan ({slow_n}) küçük olmalı.")
+    raw["ma_fast"], raw["ma_slow"] = c.rolling(fast_n).mean(), c.rolling(slow_n).mean()
+    diff = raw["ma_fast"] - raw["ma_slow"]
+    raw["cross_state"] = np.sign(diff)  # +1 golden cross yapısı (hızlı > yavaş), -1 dead cross yapısı
+    prev = diff.shift()
+    event = pd.Series(0.0, index=df.index)
+    event[(prev <= 0) & (diff > 0)] = 1.0    # dün hızlı <= yavaş, bugün hızlı > yavaş
+    event[(prev >= 0) & (diff < 0)] = -1.0   # dün hızlı >= yavaş, bugün hızlı < yavaş
+    raw["cross_event"] = event               # kesişimin yaşandığı mum
     return raw
 
 
@@ -160,3 +178,36 @@ def summarize(rows: list[dict], ratio: float = 0.5) -> dict:
     else:
         zone = "normal"
     return dict(n=n, cheap=cheap, normal=n - cheap - hot, hot=hot, zone=zone)
+
+
+# ---------- trend yönü: golden / dead cross ----------
+def cross_events(raw: pd.DataFrame, since: pd.Timestamp | None = None) -> list[tuple[pd.Timestamp, int]]:
+    """Kesişim olayları [(mum zamanı, +1 golden / -1 dead)], eskiden yeniye. `since` verilirse yalnızca ondan sonrakiler."""
+    ev = raw["cross_event"][raw["cross_event"] != 0]
+    return [(ts, int(k)) for ts, k in ev.items() if since is None or ts > since]
+
+
+def trend_info(raw: pd.DataFrame, params: dict | None, tf: str) -> dict:
+    """Son mumdaki trend yönü: golden cross yapısı = olumlu, dead cross yapısı = olumsuz (kesişimden sonra tersi olana kadar)."""
+    p = {**DEFAULT_PARAMS, **{k: v for k, v in (params or {}).items() if k != "zones"}}
+    fast_n, slow_n = p["cross"]
+    st = raw["cross_state"].iloc[-1]
+    if pd.isna(st):
+        return dict(state=np.nan, fast=fast_n, slow=slow_n, event=None, fresh=False,
+                    text=f"yetersiz veri (SMA{slow_n} henüz hesaplanamıyor)", last_text="")
+    state = int(st)
+    events = cross_events(raw)
+    event = None
+    if events:
+        ts, kind = events[-1]
+        event = dict(ts=ts, kind=kind, bars_ago=len(raw) - 1 - raw.index.get_loc(ts))
+    fresh = event is not None and event["bars_ago"] <= FRESH_BARS[tf]
+    name = {1: "Golden cross yapısı", -1: "Dead cross yapısı", 0: "Ortalamalar eşit"}[state]
+    sign = {1: ">", -1: "<", 0: "="}[state]
+    if event:
+        kind_txt = "golden" if event["kind"] == 1 else "dead"
+        last_text = f"Son kesişim: {event['ts']:%d.%m.%Y} ({event['bars_ago']} {BAR_NAME[tf]} önce, {kind_txt} cross)"
+    else:
+        last_text = "Son kesişim: eldeki veri kapsamında kesişim yok"
+    return dict(state=state, fast=fast_n, slow=slow_n, event=event, fresh=fresh,
+                text=f"{name} (SMA{fast_n} {sign} SMA{slow_n})", last_text=last_text)

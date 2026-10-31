@@ -1,4 +1,4 @@
-"""BTC için "fiyat dipte mi, şişmiş mi?" durum raporunu Telegram'a gönderir. AL/SAT sinyali üretmez.
+"""BTC için "fiyat dipte mi, şişmiş mi?" durum raporunu (ve golden/dead cross uyarılarını) Telegram'a gönderir. AL/SAT sinyali üretmez.
 
 Kullanım:
   python check_signals.py                # günlük rapor (Görev Zamanlayıcı / GitHub Actions bunu çalıştırır)
@@ -17,6 +17,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pandas as pd
 import yaml
 
 from core import sentiment
@@ -24,7 +25,8 @@ from core.data import get_candles
 from core.news import build_news_report
 from core.notifier import get_chats, load_env, send_telegram
 from core.sentiment import fetch_fear_greed
-from core.zones import MIN_BARS, ZONE_TEXT, compute_metrics, latest_rows, summarize
+from core.zones import (MIN_BARS, TREND_TEXT, ZONE_TEXT, compute_metrics, cross_events, latest_rows,
+                        summarize, trend_info)
 
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.json"
@@ -34,19 +36,20 @@ DISCLAIMER = "⚠️ Yatırım tavsiyesi değildir."
 HOW_TO_READ = ("Nasıl okunur: 🟢 = fiyat ucuz/dip tarafında (şişmiş değil), 🔴 = şişmiş tarafında. "
                "Aşırı satım dipte olunduğunu garanti etmez; düşüş trendinde uzun süre sürebilir.")
 IST = timezone(timedelta(hours=3))  # Türkiye saati
+MAX_CROSS_ALERTS = 2  # uzun süre çalışmamışsa en fazla bu kadar geçmiş kesişim uyarısı gönderilir
 GROUPS = [(1, "🟢", "Ucuz / dip bölgesinde"), (0, "⚪", "Normal"), (-1, "🔴", "Şişmiş / pahalı bölgede")]
 
 
 def analyze(df, tf: str, cfg: dict, fg_info: dict | None = None):
-    """Döndürür: (mumlar, ham değerler, gösterge satırları, özet). Fear & Greed yalnızca günlükte hesaba katılır."""
+    """Döndürür: (mumlar, ham değerler, gösterge satırları, özet, trend). Fear & Greed yalnızca günlükte hesaba katılır."""
     params = cfg["timeframes"].get(tf, {})
     raw = compute_metrics(df, params)
     rows = latest_rows(raw, params, tf, fg_info if tf == "1d" else None)
-    return df, raw, rows, summarize(rows, cfg.get("zone_ratio", 0.5))
+    return df, raw, rows, summarize(rows, cfg.get("zone_ratio", 0.5)), trend_info(raw, params, tf)
 
 
 def _indicator_block(tf: str, results, prev_zone: str | None) -> list[str]:
-    df, raw, rows, summ = results[tf]
+    df, raw, rows, summ, trend = results[tf]
     icon, label = ZONE_TEXT[summ["zone"]]
     lines = [f"━━ {TF_UP[tf]} ━━",
              f"Son mum: {df.index[-1]:%d.%m.%Y} · kapanış {df['close'].iloc[-1]:,.0f} USDT",
@@ -54,6 +57,12 @@ def _indicator_block(tf: str, results, prev_zone: str | None) -> list[str]:
     if prev_zone in ZONE_TEXT and prev_zone != summ["zone"]:
         p_icon, p_label = ZONE_TEXT[prev_zone]
         lines.append(f"Önceki rapor: {p_icon} {p_label} → değişti")
+    if trend["state"] == trend["state"]:  # NaN değilse
+        t_icon, t_label = TREND_TEXT[trend["state"]]
+        lines.append(f"Trend yönü: {t_icon} {t_label} — {trend['text']}" + (" 🆕 yeni kesişim" if trend["fresh"] else ""))
+        lines.append(f"   {trend['last_text']}")
+    else:
+        lines.append(f"Trend yönü: ❔ {trend['text']}")
     for zone, g_icon, g_label in GROUPS:
         group = [r for r in rows if r["zone"] == zone]
         if group:
@@ -64,6 +73,22 @@ def _indicator_block(tf: str, results, prev_zone: str | None) -> list[str]:
         lines.append(f"\n❔ Yetersiz veri ({len(missing)})")
         lines += [f"• {r['name']}" for r in missing]
     return lines
+
+
+def cross_message(tf: str, ts, kind: int, results) -> str:
+    df, raw, rows, summ, trend = results[tf]
+    icon, label = ZONE_TEXT[summ["zone"]]
+    fast, slow = trend["fast"], trend["slow"]
+    golden = kind == 1
+    close = raw["close"].loc[ts]
+    return "\n".join([
+        f"{'🟢' if golden else '🔴'} BTC {TF_UP[tf]} — {'GOLDEN CROSS (olumlu sinyal)' if golden else 'DEAD CROSS (olumsuz sinyal)'}",
+        f"{ts:%d.%m.%Y} mumu kapandı: hızlı ortalama (SMA{fast}), yavaş ortalamayı (SMA{slow}) {'yukarı' if golden else 'aşağı'} kesti. "
+        f"Kapanış {close:,.0f} USDT.",
+        f"Şu anki fiyat seviyesi: {icon} {label} ({summ['cheap']} ucuz · {summ['normal']} normal · {summ['hot']} şişmiş)",
+        "Not: Kesişim gecikmeli bir onay sinyalidir; fiyat çoğu zaman haftalardır o yönde hareket ediyordur. "
+        "Bitcoin'de ortalamalar sık kesiştiği için yanlış alarm da olabilir.",
+        "", DISCLAIMER])
 
 
 def report_message(results, prev_zones: dict | None = None, first_run: bool = False) -> str:
@@ -120,6 +145,14 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
         return msgs
 
     messages, new_state = [], dict(state)
+    if cfg.get("cross_alerts", True):  # yeni golden/dead cross olursa ayrı bir uyarı (ilk çalışmada yalnızca durum kaydedilir)
+        for tf in TF_UP:
+            raw, evs = results[tf][1], cross_events(results[tf][1])
+            seen = state.get(f"cross_{tf}")
+            if seen is not None:
+                since = pd.Timestamp(seen) if seen else None
+                messages += [cross_message(tf, ts, k, results) for ts, k in cross_events(raw, since)[-MAX_CROSS_ALERTS:]]
+            new_state[f"cross_{tf}"] = evs[-1][0].isoformat() if evs else ""
     new_state.pop("1d", None)  # eski al-sat sürümünün kalıntıları
     new_state.pop("1w", None)
     today = f"{datetime.now(IST):%Y-%m-%d}"
