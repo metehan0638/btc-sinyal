@@ -72,6 +72,13 @@ msg, newhist = news.build_news_report({"a": "u", "b": "u", "c": "u"}, {}, fetch=
 assert "HYPE RAPORU" in msg and "Solana (SOL)" in msg and "Ulaşılamayan kaynaklar: The Block" in msg and len(msg) < 4000
 print(msg)
 
+# 6b) güvensiz XML (ENTITY) reddedilir
+bomb = b'<?xml version="1.0"?><!DOCTYPE r [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;&a;">]><rss><channel><item><title>&b;</title></item></channel></rss>'
+try:
+    news.parse_feed(bomb, "x"); assert False
+except ValueError:
+    pass
+
 # 7) tek kaynak yetmez
 try:
     news.build_news_report(None, {}, fetch=lambda f: (arts, ["CoinDesk"], ["x"]), now=NOW); assert False

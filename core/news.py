@@ -127,6 +127,8 @@ def _local(tag) -> str:
 
 
 def parse_feed(data: bytes, source: str) -> list[Article]:
+    if b"<!ENTITY" in data:  # güvenilmeyen XML'de varlık tanımı (billion-laughs saldırısı) kabul edilmez
+        raise ValueError("güvensiz XML (ENTITY tanımı) reddedildi")
     root = ET.fromstring(data)
     out = []
     for el in root.iter():

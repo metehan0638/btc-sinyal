@@ -1,5 +1,5 @@
 """Crypto Fear & Greed Index (alternative.me): ücretsiz, anahtar gerekmez. 2018-02-01'den beri günlük veri.
-BİLGİ AMAÇLIDIR: AL/SAT konsensüsüne dahil edilmez, yalnızca rapor ve panelde gösterilir."""
+Düşük değer (korku) fiyatın şişmediğine işaret sayılır; günlük dip/şişkinlik puanına dahildir (bkz. zones.py)."""
 from __future__ import annotations
 
 import json
@@ -74,14 +74,3 @@ def summary(fg: pd.Series) -> dict:
     ago = lambda n: float(s.loc[d - pd.Timedelta(days=n)]) if (d - pd.Timedelta(days=n)) in s.index else None
     v = float(s.iloc[-1])
     return dict(date=d, value=v, label=classify(v), yesterday=ago(1), week=ago(7), month=ago(30))
-
-
-def lines(info: dict) -> list[str]:
-    """Telegram raporu için satırlar."""
-    emo = EMOJI.get(info["label"], "")
-    out = ["━━ PİYASA DUYARLILIĞI ━━", f"{emo} Fear & Greed: {info['value']:.0f} — {info['label']}"]
-    prev = [f"{n} {info[k]:.0f}" for n, k in (("dün", "yesterday"), ("7 gün önce", "week"), ("30 gün önce", "month")) if info[k] is not None]
-    if prev:
-        out.append("   " + " · ".join(prev))
-    out.append("   (bilgi amaçlı, AL/SAT sinyaline dahil değil)")
-    return out

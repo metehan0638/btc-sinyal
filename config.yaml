@@ -3,16 +3,18 @@ symbol: BTC/USDT
 exchanges: [binance, kraken, bitstamp]   # sırayla denenir, ilk çalışan kullanılır
 since: "2017-08-17"                      # Binance BTC/USDT başlangıcı
 
-# Sinyal eşikleri (10 indikatörden kaçı aynı yönde olmalı)
-entry_threshold: 8     # AL/SAT sinyali için gereken minimum onay sayısı (6-10)
-exit_threshold: 4      # backtest: AL onayı bu sayıya düşerse pozisyondan çık
-fee: 0.001             # işlem başına %0.1 komisyon
+# Genel bölge kararı: göstergelerin en az bu oranı ucuz (ya da şişmiş) bölgedeyse DİP (ya da ŞİŞMİŞ) denir
+zone_ratio: 0.5
 
-# Zaman dilimine özel indikatör ayarları (belirtilmeyenler varsayılan kalır)
+# Zaman dilimine özel ayarlar (belirtilmeyenler varsayılan kalır).
+# zones: gösterge: [ucuz eşiği, şişmiş eşiği]  ->  değer <= ucuz eşiği ise UCUZ, değer >= şişmiş eşiği ise ŞİŞMİŞ.
+# Varsayılanlar: rsi [30,70] · stochrsi [20,80] · bollinger [0.10,0.90] · mfi [20,80]
+#                ma_ratio [0.85,2.0] · drawdown [-50,-10] · fear_greed [24,75]
+# Bunlar başlangıç değerleridir; kendi görüşüne göre değiştirebilirsin.
 timeframes:
   1d:
-    ema_fast: 50
-    ema_slow: 200
+    ma_long: 200            # fiyat / 200 günlük ortalama
   1w:
-    ema_fast: 20
-    ema_slow: 50
+    ma_long: 200            # fiyat / 200 haftalık ortalama
+    zones:
+      ma_ratio: [1.2, 3.5]  # haftalık 200 ortalamaya göre ölçek farklıdır
