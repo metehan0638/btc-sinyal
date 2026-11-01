@@ -15,13 +15,13 @@ IST = timezone(timedelta(hours=3))
 UA = "Mozilla/5.0 (compatible; BTCSinyalBot/1.0)"
 
 DEFAULT_FEEDS = {
-    "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
-    "Cointelegraph": "https://cointelegraph.com/rss",
-    "Decrypt": "https://decrypt.co/feed",
-    "The Block": "https://www.theblock.co/rss.xml",
-    "Bitcoin Magazine": "https://bitcoinmagazine.com/.rss/full/",
-    "CryptoSlate": "https://cryptoslate.com/feed/",
-    "CryptoPotato": "https://cryptopotato.com/feed/",
+    "Ninja News": "https://ninjanews.io/feed/",
+    "CoinTürk": "https://www.coin-turk.com/feed",
+    "Coinkolik": "https://coinkolik.com/feed/",
+    "BTCHaber": "https://www.btchaber.com/feed/",
+    "Uzmancoin": "https://uzmancoin.com/feed/",
+    "Koin Bülteni": "https://koinbulteni.com/feed",
+    "Bitcoin Sistemi": "https://www.bitcoinsistemi.com/feed/",
 }
 
 # ---- sabitler -------------------------------------------------------------
