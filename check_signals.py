@@ -99,18 +99,13 @@ def _indicator_summary(results, asset: dict) -> list[str]:
             signal = f"{LEVELS[grade][0]} {SIGNAL_LABELS[grade]}"
             (positive if grade > 0 else neutral if grade == 0 else negative).append((grade, label, signal))
 
-        sections = (
-            ("🟢 POZİTİF", sorted(positive, key=lambda item: -item[0])),
-            ("⚪ NÖTR", neutral),
-            ("🔴 OLUMSUZ", sorted(negative, key=lambda item: -item[0])),
-        )
-        for title, indicators in sections:
-            if indicators:
-                lines.append(f"  {title}")
-                lines.extend(f"  • {label}: {signal}" for _, label, signal in indicators)
-        if missing:
-            lines.append("  — VERİ YOK")
-            lines.extend(f"  • {label}: {signal}" for label, signal in missing)
+        ordered_indicators = [
+            *sorted(positive, key=lambda item: -item[0]),
+            *neutral,
+            *sorted(negative, key=lambda item: -item[0]),
+        ]
+        lines.extend(f"• {label}: {signal}" for _, label, signal in ordered_indicators)
+        lines.extend(f"• {label}: {signal}" for label, signal in missing)
     return lines
 
 

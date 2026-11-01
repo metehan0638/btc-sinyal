@@ -43,17 +43,23 @@ with tempfile.TemporaryDirectory() as tmp:
               "MFI:", "Fiyat/SMA:", "ATH düşüşü:", "Ichimoku:", "Fear & Greed:",
               "SMA kesişimi:", "Güçlü al", "tavsiyesi değildir"):
         assert k in m1[0], f"rapor eksik: {k}"
+    for heading in ("POZİTİF", "NÖTR", "OLUMSUZ", "VERİ YOK"):
+        assert heading not in m1[0], f"raporda gereksiz grup başlığı var: {heading}"
     assert m1[0].count("Fear & Greed:") == 2, "Fear & Greed yalnızca coin başına günlük bölümde olmalı"
     assert m1[0].count("SMA kesişimi:") == 6, "kesişim her coin ve zaman diliminde gösterilmeli"
     btc_report = m1[0].split("🪙 BTC — Bitcoin", 1)[1].split("🪙 ETH — Ethereum", 1)[0]
-    group_order = ("🟢 POZİTİF", "⚪ NÖTR", "🔴 OLUMSUZ", "— VERİ YOK")
+    rank = {"🟢🟢": 0, "🟢": 1, "⚪": 2, "🔴🔴": 4, "🔴": 3, "—": 5}
     for timeframe in ("GÜNLÜK", "HAFTALIK", "AYLIK"):
         start = btc_report.index(f"📅 {timeframe}")
         next_timeframe = btc_report.find("📅 ", start + 1)
         section = btc_report[start: next_timeframe if next_timeframe >= 0 else len(btc_report)]
-        present = [heading for heading in group_order if heading in section]
-        actual = [heading for _, heading in sorted((section.index(heading), heading) for heading in present)]
-        assert actual == present, f"{timeframe} göstergeleri pozitif/nötr/olumsuz sırasına uymuyor"
+        ranks = []
+        for line in section.splitlines():
+            if not line.startswith("• "):
+                continue
+            signal = line.split(": ", 1)[1]
+            ranks.append(next(value for icon, value in rank.items() if signal.startswith(icon)))
+        assert ranks == sorted(ranks), f"{timeframe} göstergeleri pozitif/nötr/olumsuz sırasına uymuyor"
     for bad in ("Son mum:", "kapanış", "bulut üstünde", "aşırı satım", "Nasıl okunur", "GİRİŞ", "ÇIKIŞ",
                 "pozisyon", "backtest", "DİP BÖLGESİ", "ŞİŞMİŞ BÖLGE", "Trend yönü"):
         assert bad not in m1[0], f"eski dil kalmış: {bad}"
