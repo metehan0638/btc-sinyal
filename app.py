@@ -1,4 +1,4 @@
-"""BTC dip / şişkinlik paneli.  Çalıştır:  streamlit run app.py"""
+"""BTC gösterge dereceleri paneli (güçlü al ... güçlü sat).  Çalıştır:  streamlit run app.py"""
 import json
 from pathlib import Path
 
@@ -11,14 +11,16 @@ from plotly.subplots import make_subplots
 from core.data import get_candles
 from core.news import IST, analyze as analyze_news
 from core.sentiment import EMOJI as FG_EMOJI, fetch_fear_greed, summary as fg_summary
-from core.zones import METRIC_KEYS, MIN_BARS, TREND_TEXT, ZONE_TEXT, compute_metrics, latest_rows, summarize, trend_info, zones_for
+from core.zones import (LEVELS, LEVEL_TITLE, METRIC_KEYS, MIN_BARS, RATING_TEXT, bands_for, compute_metrics, latest_rows,
+                        summarize, trend_info)
 
 CFG = yaml.safe_load(open(Path(__file__).parent / "config.yaml", encoding="utf-8"))
 TF_LABEL = {"1d": "Günlük", "1w": "Haftalık"}
-ZONE_NAME = {1: "🟢 Ucuz / dip", 0: "⚪ Normal", -1: "🔴 Şişmiş"}
-ZONE_RATIO = CFG.get("zone_ratio", 0.5)
+GRADE_NAME = {g: f"{icon} {LEVEL_TITLE[g]}" for g, (icon, _) in LEVELS.items()}
+RATING_TH = tuple(CFG.get("rating_thresholds") or (0.3, 1.0))
+BAND_COLORS = ["#1b5e20", "#66bb6a", "#ef5350", "#b71c1c"]  # t1 güçlü al, t2 al, t3 sat, t4 güçlü sat
 
-st.set_page_config(page_title="BTC Dip / Şişkinlik", page_icon="₿", layout="wide")
+st.set_page_config(page_title="BTC Gösterge Dereceleri", page_icon="₿", layout="wide")
 
 # ---------------- kenar çubuğu ----------------
 if "nonce" not in st.session_state:
@@ -28,9 +30,9 @@ with st.sidebar:
     if st.button("🔄 Veriyi yenile"):
         st.session_state.nonce += 1
     st.caption("Veri 1 saat önbelleğe alınır. Hesaplar yalnızca KAPANMIŞ mumlara göre yapılır. "
-               "Bölge eşiklerini config.yaml içinden değiştirebilirsin.")
-    st.warning("Bu araç yatırım tavsiyesi değildir. Aşırı satım, dipte olunduğunu garanti etmez; "
-               "düşüş trendinde uzun süre sürebilir.")
+               "Derece aralıklarını config.yaml içinden değiştirebilirsin.")
+    st.warning("Dereceler göstergelerin değerlerine bakan mekanik etiketlerdir; emir ya da yatırım tavsiyesi değildir. "
+               "Aşırı satım, dipte olunduğunu garanti etmez; düşüş trendinde uzun süre sürebilir.")
 
 
 @st.cache_data(ttl=3600, show_spinner="Mum verisi alınıyor...")
@@ -65,7 +67,7 @@ def analyze(tf):
     params = CFG["timeframes"].get(tf, {})
     raw = compute_metrics(df, params)
     rows = latest_rows(raw, params, tf, fg_info if tf == "1d" else None)
-    return df, raw, rows, summarize(rows, ZONE_RATIO), params, trend_info(raw, params, tf)
+    return df, raw, rows, summarize(rows, RATING_TH), params, trend_info(raw, params, tf)
 
 
 try:
@@ -75,32 +77,26 @@ except Exception as e:
     st.info("İnternet bağlantını ve borsa erişimini kontrol et. Gerekirse config.yaml içindeki `exchanges` listesini değiştir.")
     st.stop()
 
+
+def rating_delta(summ):
+    c = summ["counts"]
+    return f"ort. puan {summ['mean']:+.2f} · {c[2] + c[1]} al · {c[0]} nötr · {c[-1] + c[-2]} sat" if summ["n"] else None
+
+
 # ---------------- başlık + özet ----------------
-st.title(f"₿ {CFG['symbol']} — Dip / Şişkinlik Paneli")
+st.title(f"₿ {CFG['symbol']} — Gösterge Dereceleri")
 cols = st.columns(3)
 for col, tf in zip(cols[:2], TF_LABEL):
     df, raw, rows, summ, _, _trend = data[tf]
-    icon, label = ZONE_TEXT[summ["zone"]]
-    col.metric(f"{TF_LABEL[tf]} ({df.index[-1].date()} kapanışı)", f"{icon} {label}",
-               f"{summ['cheap']} ucuz · {summ['normal']} normal · {summ['hot']} şişmiş", delta_color="off")
+    icon, label = RATING_TEXT[summ["key"]]
+    col.metric(f"{TF_LABEL[tf]} ({df.index[-1].date()} kapanışı)", f"{icon} {label}", rating_delta(summ), delta_color="off")
 if fg_info:
     cols[2].metric("Fear & Greed", f"{fg_info['value']:.0f} · {fg_info['label']}",
                    f"dün {fg_info['yesterday']:.0f}" if fg_info["yesterday"] is not None else None, delta_color="off")
 else:
     cols[2].metric("Fear & Greed", "-")
-st.caption("🟢 = fiyat ucuz/dip tarafında (şişmiş değil) · 🔴 = şişmiş tarafında. "
-           f"Genel karar için göstergelerin en az %{ZONE_RATIO * 100:.0f}'i aynı tarafta olmalı.")
-
-# trend yönü (golden/dead cross): ucuz/şişmiş puanından bağımsız, olumlu/olumsuz ekseni
-tcols = st.columns(3)
-for col, tf in zip(tcols[:2], TF_LABEL):
-    trend = data[tf][5]
-    if trend["state"] == trend["state"]:
-        t_icon, t_label = TREND_TEXT[trend["state"]]
-        col.metric(f"{TF_LABEL[tf]} trend yönü (golden/dead cross)", f"{t_icon} {t_label}",
-                   trend["last_text"].replace("Son kesişim: ", "son kesişim ") + (" · 🆕 yeni" if trend["fresh"] else ""), delta_color="off")
-    else:
-        col.metric(f"{TF_LABEL[tf]} trend yönü (golden/dead cross)", "❔ Yetersiz veri")
+st.caption("Her gösterge değerine göre 🟢🟢 güçlü al · 🟢 al · ⚪ nötr · 🔴 sat · 🔴🔴 güçlü sat dereceleri alır; "
+           "AL tarafı fiyatın ucuz/dip tarafında, SAT tarafı şişmiş tarafında olduğunu gösterir. Genel derece puan ortalamasından çıkar.")
 
 for tf_, (df_, *_rest) in data.items():
     if len(df_) < MIN_BARS[tf_]:
@@ -114,21 +110,26 @@ tab1, tab2, tab3 = st.tabs(["📊 Güncel durum", "📈 Grafik", "🔥 Haber / H
 
 # ---------------- sekme 1: güncel durum ----------------
 with tab1:
-    icon, label = ZONE_TEXT[summ["zone"]]
+    icon, label = RATING_TEXT[summ["key"]]
     st.subheader(f"{TF_LABEL[tf]}: {icon} {label}")
-    st.caption(f"{summ['n']} göstergeden {summ['cheap']} tanesi ucuz, {summ['normal']} normal, {summ['hot']} şişmiş bölgede.")
-    if trend["state"] == trend["state"]:
-        t_icon, t_label = TREND_TEXT[trend["state"]]
-        st.write(f"**Trend yönü:** {t_icon} {t_label} — {trend['text']}" + (" 🆕 yeni kesişim" if trend["fresh"] else ""))
-        st.caption(trend["last_text"] + ". Kesişim gecikmeli bir onay sinyalidir; ucuz/şişmiş puanına dahil değildir.")
+    if summ["n"]:
+        c = summ["counts"]
+        st.caption(f"{summ['n']} göstergenin ortalama puanı {summ['mean']:+.2f} (−2 güçlü sat … +2 güçlü al): "
+                   f"{c[2]} güçlü al · {c[1]} al · {c[0]} nötr · {c[-1]} sat · {c[-2]} güçlü sat. "
+                   f"Genel derece sınırları: ≥{RATING_TH[1]:g} güçlü al, ≥{RATING_TH[0]:g} al, ≤−{RATING_TH[0]:g} sat, ≤−{RATING_TH[1]:g} güçlü sat.")
 
     def color(v):
-        return {"🟢": "background-color:#1b5e20;color:white", "🔴": "background-color:#b71c1c;color:white",
-                "⚪": "background-color:#555;color:white"}.get(v[:1], "")
+        for prefix, css in (("🟢🟢", "#1b5e20"), ("🟢", "#388e3c"), ("🔴🔴", "#b71c1c"), ("🔴", "#e64a19"), ("⚪", "#555")):
+            if v.startswith(prefix):
+                return f"background-color:{css};color:white"
+        return ""
 
-    table = pd.DataFrame([{"Gösterge": r["name"], "Değer": r["text"], "Bölge": ZONE_NAME.get(r["zone"], "❔ Yetersiz veri"),
+    table = pd.DataFrame([{"Gösterge": r["name"], "Değer": r["text"], "Derece": GRADE_NAME.get(r["grade"], "❔ Yetersiz veri"),
                            "Yorum": r["note"]} for r in rows])
-    st.dataframe(table.style.map(color, subset=["Bölge"]), hide_index=True, use_container_width=True)
+    st.dataframe(table.style.map(color, subset=["Derece"]), hide_index=True, use_container_width=True)
+    if trend["state"] == trend["state"]:
+        st.caption(f"Cross: {trend['text']}. {trend['last_text']}. Golden yapısı +1, dead yapısı −1; kesişim yeniyse ±2 puan. "
+                   "Kesişim gecikmeli bir onay sinyalidir.")
 
     last = raw.iloc[-1]
     c1, c2, c3 = st.columns(3)
@@ -142,12 +143,12 @@ with tab1:
                  + " · ".join(f"{n} {fg_info[k]:.0f}" for n, k in (("dün", "yesterday"), ("7 gün önce", "week"), ("30 gün önce", "month")) if fg_info[k] is not None))
         recent = fg_series.loc[fg_series.index[-1] - pd.DateOffset(years=1):]
         f3 = go.Figure(go.Scatter(x=recent.index, y=recent.values, mode="lines", name="Fear & Greed"))
-        for y in (24, 75):
-            f3.add_hline(y=y, line_dash="dot", line_width=1)
+        for y, col_ in zip(bands_for(CFG["timeframes"].get("1d", {}), "1d")["fear_greed"], BAND_COLORS):
+            f3.add_hline(y=y, line_dash="dot", line_width=1, line_color=col_)
         f3.update_layout(height=280, yaxis=dict(range=[0, 100], title="0 = aşırı korku · 100 = aşırı açgözlülük"),
                          margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
         st.plotly_chart(f3, use_container_width=True)
-        st.caption("Kaynak: alternative.me. Düşük değer (korku) fiyatın şişmediğine işaret sayılır; günlük puana dahildir.")
+        st.caption("Kaynak: alternative.me. Düşük değer (korku) AL tarafı, yüksek değer (açgözlülük) SAT tarafı sayılır; günlük puana dahildir.")
 
 # ---------------- sekme 2: grafik ----------------
 with tab2:
@@ -160,7 +161,7 @@ with tab2:
     start = df.index[-1] - pd.DateOffset(years=cut) if cut else df.index[0]
     d, r = df.loc[start:], raw.loc[start:]
     fast_n, slow_n = trend["fast"], trend["slow"]
-    cheap, hot = zones_for(params)[key]
+    bands = bands_for(params, tf)[key]
     events = r[r["cross_event"] != 0]
     golden, dead = events[events["cross_event"] > 0], events[events["cross_event"] < 0]
 
@@ -173,13 +174,14 @@ with tab2:
     fig.add_trace(go.Scatter(x=dead.index, y=dead["ma_slow"], mode="markers", name="Dead cross",
                              marker=dict(symbol="triangle-down", size=13, color="#ff1744")), 1, 1)
     fig.add_trace(go.Scatter(x=r.index, y=r[key], name=names[key], line=dict(width=1.5)), 2, 1)
-    fig.add_hline(y=cheap, line_dash="dot", line_color="#00c853", row=2, col=1)
-    fig.add_hline(y=hot, line_dash="dot", line_color="#ff1744", row=2, col=1)
+    for y, col_ in zip(bands, BAND_COLORS):
+        fig.add_hline(y=y, line_dash="dot", line_color=col_, row=2, col=1)
     fig.update_layout(height=700, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10), legend=dict(orientation="h"))
     fig.update_yaxes(title_text="Fiyat", row=1, col=1, type="log" if log_y else "linear")
     fig.update_yaxes(title_text=names[key], row=2, col=1)
     st.plotly_chart(fig, use_container_width=True)
-    st.caption(f"Yeşil çizgi: ucuz bölge eşiği ({cheap:g}), kırmızı çizgi: şişmiş bölge eşiği ({hot:g}). Değer yeşilin altındaysa ucuz, kırmızının üstündeyse şişmiş sayılır.")
+    st.caption(f"Çizgiler: koyu yeşil {bands[0]:g} (güçlü al sınırı) · açık yeşil {bands[1]:g} (al sınırı) · açık kırmızı {bands[2]:g} (sat sınırı) · "
+               f"koyu kırmızı {bands[3]:g} (güçlü sat sınırı). Değer yeşil çizgilerin altındaysa AL tarafında, kırmızıların üstündeyse SAT tarafındadır.")
 
 # ---------------- sekme 3: haber / hype ----------------
 with tab3:

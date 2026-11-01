@@ -3,25 +3,25 @@ symbol: BTC/USDT
 exchanges: [binance, kraken, bitstamp]   # sırayla denenir, ilk çalışan kullanılır
 since: "2017-08-17"                      # Binance BTC/USDT başlangıcı
 
-# Genel bölge kararı: göstergelerin en az bu oranı ucuz (ya da şişmiş) bölgedeyse DİP (ya da ŞİŞMİŞ) denir
-zone_ratio: 0.5
+# Her gösterge değerine göre -2..+2 puan alır (güçlü sat -2, sat -1, nötr 0, al +1, güçlü al +2).
+# Genel derece, geçerli göstergelerin puan ortalamasından çıkar:
+#   ortalama >= 1.0 GÜÇLÜ AL · >= 0.3 AL · -0.3..0.3 NÖTR · <= -0.3 SAT · <= -1.0 GÜÇLÜ SAT
+rating_thresholds: [0.3, 1.0]            # [al/sat sınırı, güçlü sınırı]
+
+# Golden/dead cross de bir gösterge sayılır: golden yapısı +1, dead yapısı -1; kesişim yeniyse (günlük 14, haftalık 4 mum içinde) +-2.
+cross_alerts: true                       # yeni golden/dead cross olunca ayrıca anlık uyarı gönder
 
 # Zaman dilimine özel ayarlar (belirtilmeyenler varsayılan kalır).
-# zones: gösterge: [ucuz eşiği, şişmiş eşiği]  ->  değer <= ucuz eşiği ise UCUZ, değer >= şişmiş eşiği ise ŞİŞMİŞ.
-# Varsayılanlar: rsi [30,70] · stochrsi [20,80] · bollinger [0.10,0.90] · mfi [20,80]
-#                ma_ratio [0.85,2.0] · drawdown [-50,-10] · fear_greed [24,75]
+# bands: gösterge: [t1, t2, t3, t4]  ->  değer <= t1 GÜÇLÜ AL · <= t2 AL · t2-t3 arası NÖTR · >= t3 SAT · >= t4 GÜÇLÜ SAT
+# Varsayılanlar:
+#   rsi [20,30,70,80] · stochrsi [10,20,80,90] · bollinger [0,0.10,0.90,1.0] · mfi [10,20,80,90]
+#   ma_ratio günlük [0.8,1.0,2.0,2.4], haftalık [1.0,1.3,2.5,3.5] · drawdown [-65,-50,-10,-3] · fear_greed [10,24,75,90]
 # Bunlar başlangıç değerleridir; kendi görüşüne göre değiştirebilirsin.
-# cross: [hızlı, yavaş] SMA periyotları. Hızlı yavaşı yukarı keserse golden cross (olumlu), aşağı keserse dead cross (olumsuz).
-# Bu, ucuz/şişmiş puanına GİRMEZ; raporda ayrı "Trend yönü" satırı olarak görünür.
-# Haftalıkta 50/200 çok yavaştır (BTC'de yalnızca birkaç kez kesişti); daha sık sinyal için [20, 50] denenebilir.
-cross_alerts: true          # yeni golden/dead cross olunca ayrıca anlık uyarı gönder
-
+# cross: [hızlı, yavaş] SMA periyotları. Haftalıkta 50/200 çok yavaştır (BTC'de yalnızca birkaç kez kesişti); daha sık sinyal için [20, 50].
 timeframes:
   1d:
     ma_long: 200            # fiyat / 200 günlük ortalama
-    cross: [50, 200]        # klasik golden/dead cross
+    cross: [50, 200]
   1w:
     ma_long: 200            # fiyat / 200 haftalık ortalama
     cross: [50, 200]
-    zones:
-      ma_ratio: [1.2, 3.5]  # haftalık 200 ortalamaya göre ölçek farklıdır

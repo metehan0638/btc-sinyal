@@ -1,12 +1,11 @@
-"""Fiyat dipte mi, şişmiş mi?  Her gösterge için ham değer + bölge:
+"""BTC için gösterge dereceleri. Her gösterge, değerine göre 5 dereceden birine yerleştirilir:
 
-   +1  ucuz / dip bölgesi   (aşırı satım, derin düşüş, korku ...)  -> fiyat şişmiş DEĞİL
-    0  normal
-   -1  şişmiş / pahalı bölge (aşırı alım, tepeye yakın, aşırı açgözlülük ...)
-  NaN  yetersiz veri
+   +2 GÜÇLÜ AL · +1 AL · 0 NÖTR · -1 SAT · -2 GÜÇLÜ SAT      (NaN = yetersiz veri)
 
-AL/SAT sinyali ÜRETMEZ, yalnızca durum raporu verir. Hesaplar sadece geçmiş mumları kullanır.
-Eşikler config.yaml içinden değiştirilebilir (varsayılanlar aşağıdadır)."""
+AL tarafı = fiyat ucuz/dip tarafında (şişmiş değil), SAT tarafı = fiyat şişmiş tarafında.
+Bunlar göstergelerin değerlerine bakan MEKANİK derecelerdir; emir ya da tavsiye değildir.
+Genel derece, geçerli göstergelerin puan ortalamasından çıkar. Hesaplar yalnızca geçmiş mumları kullanır.
+Aralıklar config.yaml içinden değiştirilebilir (varsayılanlar aşağıdadır)."""
 from __future__ import annotations
 
 import numpy as np
@@ -15,18 +14,21 @@ import pandas as pd
 DEFAULT_PARAMS = dict(rsi_period=14, stoch=(14, 3, 3), bb_period=20, bb_std=2.0, mfi_period=14, ma_long=200,
                       cross=(50, 200))  # cross: golden/dead cross için (hızlı, yavaş) SMA periyotları
 
-# gösterge -> (ucuz eşiği, şişmiş eşiği): değer <= ucuz eşiği ise UCUZ, değer >= şişmiş eşiği ise ŞİŞMİŞ
-DEFAULT_ZONES = {
-    "rsi": (30, 70),
-    "stochrsi": (20, 80),
-    "bollinger": (0.10, 0.90),     # %B: 0 = alt bant, 1 = üst bant
-    "mfi": (20, 80),
-    "ma_ratio": (0.85, 2.0),       # fiyat / uzun hareketli ortalama
-    "drawdown": (-50, -10),        # ATH'den uzaklık, %
-    "fear_greed": (24, 75),        # alternative.me: 0-24 aşırı korku, 75-100 aşırı açgözlülük
+# gösterge -> 4 eşik (t1 < t2 < t3 < t4):
+#   değer <= t1 GÜÇLÜ AL · <= t2 AL · t2 ile t3 arası NÖTR · >= t3 SAT · >= t4 GÜÇLÜ SAT
+DEFAULT_BANDS = {
+    "rsi": (20, 30, 70, 80),
+    "stochrsi": (10, 20, 80, 90),
+    "bollinger": (0.0, 0.10, 0.90, 1.0),    # %B: 0 = alt bant, 1 = üst bant
+    "mfi": (10, 20, 80, 90),
+    "ma_ratio": (0.8, 1.0, 2.0, 2.4),       # fiyat / uzun SMA (günlük: Mayer Multiple)
+    "drawdown": (-65, -50, -10, -3),        # ATH'den uzaklık, %
+    "fear_greed": (10, 24, 75, 90),         # alternative.me: 0-24 aşırı korku, 75-100 aşırı açgözlülük
 }
+# zaman dilimine özel varsayılanlar (config'teki `bands` bunların üzerine yazar)
+TF_BANDS = {"1w": {"ma_ratio": (1.0, 1.3, 2.5, 3.5)}}  # haftalıkta fiyat / 200 haftalık ortalama
 
-# (ucuz yönündeki ifade, şişmiş yönündeki ifade)
+# (AL yönündeki ifade, SAT yönündeki ifade)
 NOTES = {
     "rsi": ("aşırı satım", "aşırı alım"),
     "stochrsi": ("aşırı satım", "aşırı alım"),
@@ -34,18 +36,19 @@ NOTES = {
     "mfi": ("aşırı satım (para çıkışı)", "aşırı alım (para girişi)"),
     "ma_ratio": ("uzun ortalamanın altında/yakınında", "uzun ortalamadan çok uzakta"),
     "drawdown": ("zirveden derin düşüş", "zirveye çok yakın"),
-    "fear_greed": ("aşırı korku", "aşırı açgözlülük"),
+    "fear_greed": ("", ""),  # etiket (Aşırı korku vb.) zaten metinde
 }
+METRIC_KEYS = ["rsi", "stochrsi", "bollinger", "mfi", "ma_ratio", "drawdown"]
 # bundan kısa geçmişle değerler güvenilmez (yedek borsaya düşülmüş olabilir)
 MIN_BARS = {"1d": 1500, "1w": 250}
-METRIC_KEYS = ["rsi", "stochrsi", "bollinger", "mfi", "ma_ratio", "drawdown"]
 UNIT = {"1d": "günlük", "1w": "haftalık"}
 BAR_NAME = {"1d": "gün", "1w": "hafta"}
-FRESH_BARS = {"1d": 14, "1w": 4}  # son kesişim bu kadar mum içindeyse "yeni" sayılır
-# Trend yönü (golden/dead cross): ucuz/şişmiş ekseninden BAĞIMSIZ, olumlu/olumsuz ekseni
-TREND_TEXT = {1: ("🟢", "OLUMLU"), -1: ("🔴", "OLUMSUZ"), 0: ("⚪", "NÖTR")}
-ZONE_TEXT = {"dip": ("🟢", "DİP BÖLGESİ"), "normal": ("⚪", "NORMAL"),
-             "hot": ("🔴", "ŞİŞMİŞ BÖLGE"), "nodata": ("❔", "YETERSİZ VERİ")}
+FRESH_BARS = {"1d": 14, "1w": 4}  # son kesişim bu kadar mum içindeyse "yeni" sayılır (cross +-2 puan)
+
+LEVELS = {2: ("🟢🟢", "GÜÇLÜ AL"), 1: ("🟢", "AL"), 0: ("⚪", "NÖTR"), -1: ("🔴", "SAT"), -2: ("🔴🔴", "GÜÇLÜ SAT")}
+LEVEL_TITLE = {2: "Güçlü al", 1: "Al", 0: "Nötr", -1: "Sat", -2: "Güçlü sat"}
+RATING_KEYS = {2: "strong_buy", 1: "buy", 0: "neutral", -1: "sell", -2: "strong_sell"}
+RATING_TEXT = {**{RATING_KEYS[g]: v for g, v in LEVELS.items()}, "nodata": ("❔", "YETERSİZ VERİ")}
 
 
 # ---------- hesaplar ----------
@@ -61,9 +64,13 @@ def rsi(close: pd.Series, n: int = 14) -> pd.Series:
     return out
 
 
+def _params(params: dict | None) -> dict:
+    return {**DEFAULT_PARAMS, **{k: v for k, v in (params or {}).items() if k not in ("bands", "zones")}}
+
+
 def compute_metrics(df: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
     """Her mum için ham gösterge değerleri (kapanmış mumlar varsayılır)."""
-    p = {**DEFAULT_PARAMS, **{k: v for k, v in (params or {}).items() if k != "zones"}}
+    p = _params(params)
     c, h, l, v = df["close"], df["high"], df["low"], df["volume"]
     raw = pd.DataFrame(index=df.index)
     raw["close"] = c
@@ -107,80 +114,92 @@ def compute_metrics(df: pd.DataFrame, params: dict | None = None) -> pd.DataFram
     return raw
 
 
-# ---------- bölgeler ----------
-def zones_for(params: dict | None = None) -> dict:
-    z = dict(DEFAULT_ZONES)
-    for k, v in ((params or {}).get("zones") or {}).items():
-        z[k] = tuple(v)
-    for k, (cheap, hot) in z.items():
-        if not cheap < hot:
-            raise ValueError(f"'{k}' bölge eşikleri hatalı: ucuz eşiği ({cheap}) şişmiş eşiğinden ({hot}) küçük olmalı.")
-    return z
+# ---------- dereceler ----------
+def bands_for(params: dict | None = None, tf: str = "1d") -> dict:
+    """Gösterge -> (t1, t2, t3, t4). Öncelik: config `bands` > zaman dilimi varsayılanı > genel varsayılan."""
+    if (params or {}).get("zones"):
+        raise ValueError("config'te 'zones' yerine 'bands' kullanılmalı ve her gösterge için 4 eşik verilmelidir "
+                         "(güçlü al, al, sat, güçlü sat sınırları).")
+    b = {**DEFAULT_BANDS, **TF_BANDS.get(tf, {})}
+    for k, v in ((params or {}).get("bands") or {}).items():
+        b[k] = tuple(v)
+    for k, t in b.items():
+        if len(t) != 4 or not (t[0] < t[1] < t[2] < t[3]):
+            raise ValueError(f"'{k}' için 4 artan eşik gerekir (güçlü al < al < sat < güçlü sat), verilen: {list(t)}")
+    return b
 
 
-def classify(values: pd.Series, cheap: float, hot: float) -> pd.Series:
-    """+1 ucuz (değer <= cheap), -1 şişmiş (değer >= hot), 0 normal, NaN veri yok."""
-    out = pd.Series(0.0, index=values.index)
-    out[values <= cheap] = 1.0
-    out[values >= hot] = -1.0
-    out[values.isna()] = np.nan
-    return out
-
-
-def zone_votes(raw: pd.DataFrame, params: dict | None = None) -> pd.DataFrame:
-    z = zones_for(params)
-    return pd.DataFrame({k: classify(raw[k], *z[k]) for k in METRIC_KEYS}, index=raw.index)
-
-
-def _row(key, name, value, text, z):
+def grade_value(value, bands) -> float:
+    """+2 güçlü al, +1 al, 0 nötr, -1 sat, -2 güçlü sat, NaN veri yok."""
     if value is None or pd.isna(value):
-        return dict(key=key, name=name, value=np.nan, text="-", zone=np.nan, note="")
-    zone = 1 if value <= z[key][0] else (-1 if value >= z[key][1] else 0)
-    return dict(key=key, name=name, value=float(value), text=text, zone=zone,
-                note=NOTES[key][0] if zone == 1 else (NOTES[key][1] if zone == -1 else ""))
+        return np.nan
+    t1, t2, t3, t4 = bands
+    if value <= t1:
+        return 2
+    if value <= t2:
+        return 1
+    if value >= t4:
+        return -2
+    if value >= t3:
+        return -1
+    return 0
+
+
+def grade_series(values: pd.Series, bands) -> pd.Series:
+    return values.map(lambda v: grade_value(v, bands)).astype(float)
+
+
+def grade_votes(raw: pd.DataFrame, params: dict | None = None, tf: str = "1d") -> pd.DataFrame:
+    b = bands_for(params, tf)
+    return pd.DataFrame({k: grade_series(raw[k], b[k]) for k in METRIC_KEYS}, index=raw.index)
+
+
+def _row(key, name, value, text, bands):
+    g = grade_value(value, bands[key])
+    if pd.isna(g):
+        return dict(key=key, name=name, value=np.nan, text="-", grade=np.nan, note="")
+    note = NOTES[key][0] if g > 0 else (NOTES[key][1] if g < 0 else "")
+    return dict(key=key, name=name, value=float(value), text=text, grade=int(g), note=note)
 
 
 def latest_rows(raw: pd.DataFrame, params: dict | None, tf: str, fg_info: dict | None = None) -> list[dict]:
-    """Son mum için gösterge satırları. fg_info verilirse Fear & Greed da (yalnızca günlükte) eklenir."""
-    p = {**DEFAULT_PARAMS, **{k: v for k, v in (params or {}).items() if k != "zones"}}
-    z, last = zones_for(params), raw.iloc[-1]
-    unit = UNIT[tf]
-    ma = last["ma_ratio"]
+    """Son mum için gösterge satırları (derecesiyle). Fear & Greed yalnızca verilirse (günlükte) eklenir."""
+    p = _params(params)
+    b, last = bands_for(params, tf), raw.iloc[-1]
+    unit, ma = UNIT[tf], last["ma_ratio"]
     rows = [
-        _row("rsi", f"RSI({p['rsi_period']})", last["rsi"], f"{last['rsi']:.1f}", z),
-        _row("stochrsi", "Stochastic RSI", last["stochrsi"], f"%K={last['stochrsi']:.0f}", z),
-        _row("bollinger", "Bollinger %B", last["bollinger"], f"%B={last['bollinger']:.2f}", z),
-        _row("mfi", f"MFI({p['mfi_period']})", last["mfi"], f"{last['mfi']:.1f}", z),
+        _row("rsi", f"RSI({p['rsi_period']})", last["rsi"], f"{last['rsi']:.1f}", b),
+        _row("stochrsi", "Stochastic RSI", last["stochrsi"], f"%K={last['stochrsi']:.0f}", b),
+        _row("bollinger", "Bollinger %B", last["bollinger"], f"%B={last['bollinger']:.2f}", b),
+        _row("mfi", f"MFI({p['mfi_period']})", last["mfi"], f"{last['mfi']:.1f}", b),
         _row("ma_ratio", f"Fiyat / {p['ma_long']} {unit} ortalama", ma,
-             f"{ma:.2f} (ortalamanın %{abs(ma - 1) * 100:.0f} {'üstünde' if ma >= 1 else 'altında'})" if pd.notna(ma) else "-", z),
-        _row("drawdown", "ATH'den uzaklık", last["drawdown"], f"%{last['drawdown']:.1f} (ATH {last['ath']:,.0f})", z),
+             f"{ma:.2f} (ortalamanın %{abs(ma - 1) * 100:.0f} {'üstünde' if ma >= 1 else 'altında'})" if pd.notna(ma) else "-", b),
+        _row("drawdown", "ATH'den uzaklık", last["drawdown"], f"%{last['drawdown']:.1f} (ATH {last['ath']:,.0f})", b),
     ]
     if fg_info:
         hist = " · ".join(f"{n} {fg_info[k]:.0f}" for n, k in (("dün", "yesterday"), ("7g", "week"), ("30g", "month")) if fg_info.get(k) is not None)
-        row = _row("fear_greed", "Fear & Greed", fg_info["value"],
-                   f"{fg_info['value']:.0f} — {fg_info['label']}" + (f" ({hist})" if hist else ""), z)
-        row["note"] = ""  # etiket (Aşırı korku vb.) zaten metinde
-        rows.append(row)
+        rows.append(_row("fear_greed", "Fear & Greed", fg_info["value"],
+                         f"{fg_info['value']:.0f} — {fg_info['label']}" + (f" ({hist})" if hist else ""), b))
+    rows.append(cross_row(trend_info(raw, params, tf)))
     return rows
 
 
-def summarize(rows: list[dict], ratio: float = 0.5) -> dict:
-    """Göstergelerin en az `ratio` kadarı ucuz bölgedeyse DİP, şişmiş bölgedeyse ŞİŞMİŞ; aksi halde NORMAL."""
-    valid = [r for r in rows if not pd.isna(r["zone"])]
-    n = len(valid)
-    cheap, hot = sum(r["zone"] == 1 for r in valid), sum(r["zone"] == -1 for r in valid)
-    if n == 0:
-        zone = "nodata"
-    elif cheap / n >= ratio and cheap > hot:
-        zone = "dip"
-    elif hot / n >= ratio and hot > cheap:
-        zone = "hot"
-    else:
-        zone = "normal"
-    return dict(n=n, cheap=cheap, normal=n - cheap - hot, hot=hot, zone=zone)
+def summarize(rows: list[dict], thresholds=(0.3, 1.0)) -> dict:
+    """Geçerli göstergelerin puan ortalaması (-2..+2) -> genel derece.
+    thresholds = (AL/SAT sınırı, GÜÇLÜ sınırı): ortalama >= 1.0 güçlü al, >= 0.3 al, -0.3..0.3 nötr, <= -0.3 sat, <= -1.0 güçlü sat."""
+    t_mid, t_strong = thresholds
+    if not 0 < t_mid < t_strong <= 2:
+        raise ValueError("rating_thresholds için 0 < al/sat sınırı < güçlü sınırı <= 2 olmalı.")
+    valid = [r["grade"] for r in rows if not pd.isna(r["grade"])]
+    counts = {g: sum(v == g for v in valid) for g in LEVELS}
+    if not valid:
+        return dict(n=0, counts=counts, mean=np.nan, level=np.nan, key="nodata")
+    mean = round(sum(valid) / len(valid), 9)
+    level = 2 if mean >= t_strong else 1 if mean >= t_mid else -2 if mean <= -t_strong else -1 if mean <= -t_mid else 0
+    return dict(n=len(valid), counts=counts, mean=mean, level=level, key=RATING_KEYS[level])
 
 
-# ---------- trend yönü: golden / dead cross ----------
+# ---------- golden / dead cross ----------
 def cross_events(raw: pd.DataFrame, since: pd.Timestamp | None = None) -> list[tuple[pd.Timestamp, int]]:
     """Kesişim olayları [(mum zamanı, +1 golden / -1 dead)], eskiden yeniye. `since` verilirse yalnızca ondan sonrakiler."""
     ev = raw["cross_event"][raw["cross_event"] != 0]
@@ -188,9 +207,8 @@ def cross_events(raw: pd.DataFrame, since: pd.Timestamp | None = None) -> list[t
 
 
 def trend_info(raw: pd.DataFrame, params: dict | None, tf: str) -> dict:
-    """Son mumdaki trend yönü: golden cross yapısı = olumlu, dead cross yapısı = olumsuz (kesişimden sonra tersi olana kadar)."""
-    p = {**DEFAULT_PARAMS, **{k: v for k, v in (params or {}).items() if k != "zones"}}
-    fast_n, slow_n = p["cross"]
+    """Son mumdaki trend yapısı: golden cross yapısı (hızlı > yavaş) ya da dead cross yapısı (hızlı < yavaş)."""
+    fast_n, slow_n = _params(params)["cross"]
     st = raw["cross_state"].iloc[-1]
     if pd.isna(st):
         return dict(state=np.nan, fast=fast_n, slow=slow_n, event=None, fresh=False,
@@ -211,3 +229,13 @@ def trend_info(raw: pd.DataFrame, params: dict | None, tf: str) -> dict:
         last_text = "Son kesişim: eldeki veri kapsamında kesişim yok"
     return dict(state=state, fast=fast_n, slow=slow_n, event=event, fresh=fresh,
                 text=f"{name} (SMA{fast_n} {sign} SMA{slow_n})", last_text=last_text)
+
+
+def cross_row(trend: dict) -> dict:
+    """Cross de bir gösterge satırıdır: golden yapısı +1 (AL), dead yapısı -1 (SAT); kesişim yeniyse (FRESH_BARS içinde) +-2."""
+    name = f"Golden/Dead cross (SMA{trend['fast']}/{trend['slow']})"
+    if trend["state"] != trend["state"]:  # NaN
+        return dict(key="cross", name=name, value=np.nan, text="-", grade=np.nan, note="")
+    grade = trend["state"] * (2 if trend["fresh"] else 1)
+    text = trend["text"] + " · " + trend["last_text"].replace("Son kesişim: ", "son kesişim ") + (" 🆕" if trend["fresh"] else "")
+    return dict(key="cross", name=name, value=float(trend["state"]), text=text, grade=int(grade), note="")

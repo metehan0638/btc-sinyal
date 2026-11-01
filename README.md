@@ -1,49 +1,43 @@
-# BTC Dip / Şişkinlik Raporu
+# BTC Gösterge Dereceleri
 
-Bitcoin fiyatının **dipte mi, şişmiş mi** olduğunu birkaç göstergeyle ölçen ve her gün Telegram'a rapor gönderen bir araç.
-**AL/SAT emri vermez, backtest yapmaz.** Amaç: fiyatın ucuz tarafta olup olmadığını, şişmediğini görmek.
+Bitcoin için birkaç göstergeyi değerlerine göre **5 dereceden birine** yerleştiren ve her gün Telegram'a rapor gönderen bir araç:
+`🟢🟢 güçlü al · 🟢 al · ⚪ nötr · 🔴 sat · 🔴🔴 güçlü sat`.
 
-Mantık basit: her gösterge için değer, "ucuz / normal / şişmiş" bölgelerinden birine yerleştirilir.
+Mantık: **AL tarafı fiyatın ucuz/dip tarafında (şişmiş değil), SAT tarafı şişmiş tarafında** olduğunu gösterir.
+Örneğin RSI 0'a yaklaşırsa ya da Fear & Greed çok düşerse AL tarafına yazılır.
+Bu dereceler göstergelerin değerlerine bakan **mekanik etiketlerdir; emir ya da yatırım tavsiyesi değildir.** Backtest yoktur.
 
-| Gösterge | 🟢 Ucuz / dip (≤) | 🔴 Şişmiş (≥) |
-|---|---|---|
-| RSI(14) | 30 | 70 |
-| Stochastic RSI (%K) | 20 | 80 |
-| Bollinger %B | 0.10 | 0.90 |
-| MFI(14) | 20 | 80 |
-| Fiyat / 200 ortalama (günlük) | 0.85 | 2.0 |
-| Fiyat / 200 ortalama (haftalık) | 1.2 | 3.5 |
-| ATH'den uzaklık | %-50 | %-10 |
-| Fear & Greed (yalnızca günlük) | 24 | 75 |
+## Dereceler (varsayılan aralıklar)
 
-Genel karar: göstergelerin **en az yarısı** ucuz bölgedeyse `🟢 DİP BÖLGESİ`, en az yarısı şişmiş bölgedeyse `🔴 ŞİŞMİŞ BÖLGE`, değilse `⚪ NORMAL`.
-Günlük ve haftalık mumlar ayrı değerlendirilir. Bu eşikler **başlangıç değerleridir**; `config.yaml` içinden değiştirilebilir.
+| Gösterge | 🟢🟢 Güçlü al (≤) | 🟢 Al (≤) | ⚪ Nötr | 🔴 Sat (≥) | 🔴🔴 Güçlü sat (≥) |
+|---|---|---|---|---|---|
+| RSI(14) | 20 | 30 | arası | 70 | 80 |
+| Stochastic RSI (%K) | 10 | 20 | arası | 80 | 90 |
+| Bollinger %B | 0.0 | 0.10 | arası | 0.90 | 1.0 |
+| MFI(14) | 10 | 20 | arası | 80 | 90 |
+| Fiyat / 200 ortalama, günlük (Mayer) | 0.8 | 1.0 | arası | 2.0 | 2.4 |
+| Fiyat / 200 ortalama, haftalık | 1.0 | 1.3 | arası | 2.5 | 3.5 |
+| ATH'den uzaklık (%) | -65 | -50 | arası | -10 | -3 |
+| Fear & Greed (yalnızca günlük) | 10 | 24 | arası | 75 | 90 |
+| Golden/Dead cross (SMA 50/200) | yeni golden cross | golden yapısı | — | dead yapısı | yeni dead cross |
 
-## Trend yönü: golden / dead cross
+Golden/dead cross aralıkla değil duruma göre puanlanır: hızlı SMA yavaşın üstündeyse AL (+1), altındaysa SAT (-1);
+kesişim yeniyse (günlük 14, haftalık 4 mum içinde) güçlü AL/SAT (±2). Kesişim gecikmeli bir onay sinyalidir.
+Yeni bir kesişim olunca raporun dışında ayrıca uyarı gelir (`cross_alerts: false` ile kapatılır).
 
-Ucuz/şişmiş puanından **ayrı** bir eksendir: fiyatın *nerede* olduğunu değil, trendin *hangi yönde* olduğunu gösterir.
-Hızlı SMA yavaş SMA'yı yukarı keserse **golden cross** (🟢 olumlu), aşağı keserse **dead cross** (🔴 olumsuz) sayılır;
-tersi bir kesişim olana kadar yapı korunur. Raporda her zaman diliminin altında "Trend yönü" satırı ve son kesişim tarihi görünür.
+**Genel derece:** her gösterge -2 (güçlü sat) ile +2 (güçlü al) arasında puan alır; geçerli göstergelerin ortalaması
+≥ 1.0 güçlü al, ≥ 0.3 al, -0.3 ile 0.3 arası nötr, ≤ -0.3 sat, ≤ -1.0 güçlü sat demektir.
+Günlük ve haftalık ayrı değerlendirilir. Tüm aralıklar ve sınırlar `config.yaml` içinden değiştirilebilir; bunlar **başlangıç değerleridir**.
 
-| Zaman dilimi | Hızlı / yavaş SMA |
-|---|---|
-| Günlük | 50 / 200 |
-| Haftalık | 50 / 200 |
-
-Periyotlar `config.yaml`'daki `cross: [hızlı, yavaş]` ile değiştirilebilir. Haftalık 50/200 çok yavaştır (BTC'de yalnızca birkaç kez kesişti);
-daha sık sinyal için `[20, 50]` denenebilir. Yeni bir kesişim olunca raporun dışında **ayrıca uyarı** gelir (`cross_alerts: false` ile kapatılır).
-
-> Kesişim gecikmeli bir onay sinyalidir: ortalamalar geçmiş fiyattan hesaplandığı için fiyat çoğu zaman o yönde zaten haftalardır hareket etmiştir.
-> Bitcoin'de ortalamalar sık kesiştiği için yanlış alarmlar da olur. Dip bölgesi + dead cross "fiyat ucuz ama trend hâlâ aşağı", dip bölgesi + golden cross "fiyat ucuz ve trend dönüyor" gibi okunabilir.
-
-> **Sınırlar:** Aşırı satım, dipte olunduğunu garanti etmez; düşüş trendinde göstergeler uzun süre ucuz bölgede kalabilir.
-> "Şişmiş değil" de "ucuz" demek değildir. Rapor bir bağlam bilgisidir, tek başına karar dayanağı değildir. Yatırım tavsiyesi değildir.
+> **Sınırlar:** Aşırı satım, dipte olunduğunu garanti etmez; düşüş trendinde göstergeler uzun süre AL tarafında kalabilir.
+> Dip arayan (RSI, Mayer vb.) ve trend izleyen (cross) göstergeler zaman zaman zıt yönde okunur; ortalama bunları birbirine karıştırır.
+> Rapor bir bağlam bilgisidir, tek başına karar dayanağı değildir.
 
 ## Raporda ne var?
 
-- Günlük ve haftalık: genel bölge, trend yönü (golden/dead cross), her göstergenin değeri ve bölgesi, bir önceki rapora göre bölge değişimi
-- Yeni golden/dead cross olunca ayrı bir uyarı mesajı
+- Günlük ve haftalık: genel derece, puan ortalaması, her göstergenin değeri ve derecesi (güçlü al'dan güçlü sat'a gruplanmış), bir önceki rapora göre derece değişimi
 - Fear & Greed (günlük puana dahil) ve haber/hype raporu (kategori ve coin bazında öne çıkan konular)
+- Yeni golden/dead cross olunca ayrı bir uyarı mesajı
 
 ## Kurulum
 
@@ -57,10 +51,10 @@ Chat ID'ni bulmak için: botuna Telegram'dan bir mesaj at, sonra `python check_s
 ## Kullanım
 
 ```
-python check_signals.py --dry-run     # raporu ekrana yazar, göndermez
-python check_signals.py --report      # raporu hemen Telegram'a gönderir
-python check_signals.py               # günde bir rapor (zamanlanmış çalışma bunu kullanır)
-streamlit run app.py                  # panel: tablo, grafik, haberler
+python check_signals.py --report --dry-run   # raporu ekrana yazar, göndermez
+python check_signals.py --report             # raporu hemen Telegram'a gönderir
+python check_signals.py                      # günde bir rapor (zamanlanmış çalışma bunu kullanır)
+streamlit run app.py                         # panel: tablo, grafik, haberler
 ```
 
 ## Otomatik çalışma (GitHub Actions)
@@ -82,7 +76,7 @@ Hiçbiri internet veya Telegram gerektirmez.
 
 ## Dosya yapısı
 
-- `core/zones.py`: göstergeler, bölge eşikleri ve genel karar
+- `core/zones.py`: göstergeler, derece aralıkları, genel derece, golden/dead cross
 - `core/data.py`: borsa verisi (kapanmamış mumlar atılır)
 - `core/sentiment.py`: Fear & Greed endeksi
 - `core/news.py`: RSS haber/hype raporu

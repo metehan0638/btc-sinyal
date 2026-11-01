@@ -1,4 +1,5 @@
-"""BTC için "fiyat dipte mi, şişmiş mi?" durum raporunu (ve golden/dead cross uyarılarını) Telegram'a gönderir. AL/SAT sinyali üretmez.
+"""BTC için gösterge derecelendirme raporunu (güçlü al ... güçlü sat) ve golden/dead cross uyarılarını Telegram'a gönderir.
+Dereceler göstergelerin değerlerine bakan mekanik etiketlerdir; emir ya da tavsiye değildir.
 
 Kullanım:
   python check_signals.py                # günlük rapor (Görev Zamanlayıcı / GitHub Actions bunu çalıştırır)
@@ -25,7 +26,7 @@ from core.data import get_candles
 from core.news import build_news_report
 from core.notifier import get_chats, load_env, send_telegram
 from core.sentiment import fetch_fear_greed
-from core.zones import (MIN_BARS, TREND_TEXT, ZONE_TEXT, compute_metrics, cross_events, latest_rows,
+from core.zones import (LEVEL_TITLE, LEVELS, MIN_BARS, RATING_TEXT, compute_metrics, cross_events, latest_rows,
                         summarize, trend_info)
 
 ROOT = Path(__file__).resolve().parent
@@ -33,11 +34,16 @@ STATE_FILE = ROOT / "state.json"
 TF_UP = {"1d": "GÜNLÜK", "1w": "HAFTALIK"}
 TF_TR = {"1d": "Günlük", "1w": "Haftalık"}
 DISCLAIMER = "⚠️ Yatırım tavsiyesi değildir."
-HOW_TO_READ = ("Nasıl okunur: 🟢 = fiyat ucuz/dip tarafında (şişmiş değil), 🔴 = şişmiş tarafında. "
-               "Aşırı satım dipte olunduğunu garanti etmez; düşüş trendinde uzun süre sürebilir.")
+HOW_TO_READ = ("Nasıl okunur: her gösterge değerine göre 5 dereceden birine girer (güçlü al · al · nötr · sat · güçlü sat); "
+               "AL tarafı fiyatın ucuz/dip tarafında, SAT tarafı şişmiş tarafında olduğunu gösterir. "
+               "Bunlar mekanik derecelerdir, emir değildir; aşırı satım düşüş trendinde uzun süre sürebilir.")
 IST = timezone(timedelta(hours=3))  # Türkiye saati
 MAX_CROSS_ALERTS = 2  # uzun süre çalışmamışsa en fazla bu kadar geçmiş kesişim uyarısı gönderilir
-GROUPS = [(1, "🟢", "Ucuz / dip bölgesinde"), (0, "⚪", "Normal"), (-1, "🔴", "Şişmiş / pahalı bölgede")]
+DEFAULT_THRESHOLDS = (0.3, 1.0)
+
+
+def _thresholds(cfg: dict):
+    return tuple(cfg.get("rating_thresholds") or DEFAULT_THRESHOLDS)
 
 
 def analyze(df, tf: str, cfg: dict, fg_info: dict | None = None):
@@ -45,30 +51,30 @@ def analyze(df, tf: str, cfg: dict, fg_info: dict | None = None):
     params = cfg["timeframes"].get(tf, {})
     raw = compute_metrics(df, params)
     rows = latest_rows(raw, params, tf, fg_info if tf == "1d" else None)
-    return df, raw, rows, summarize(rows, cfg.get("zone_ratio", 0.5)), trend_info(raw, params, tf)
+    return df, raw, rows, summarize(rows, _thresholds(cfg)), trend_info(raw, params, tf)
 
 
-def _indicator_block(tf: str, results, prev_zone: str | None) -> list[str]:
+def _score_line(summ: dict) -> str:
+    c = summ["counts"]
+    return (f"ortalama puan {summ['mean']:+.2f} ({summ['n']} gösterge: {c[2]} güçlü al · {c[1]} al · {c[0]} nötr · "
+            f"{c[-1]} sat · {c[-2]} güçlü sat)")
+
+
+def _indicator_block(tf: str, results, prev_rating: str | None) -> list[str]:
     df, raw, rows, summ, trend = results[tf]
-    icon, label = ZONE_TEXT[summ["zone"]]
+    icon, label = RATING_TEXT[summ["key"]]
     lines = [f"━━ {TF_UP[tf]} ━━",
              f"Son mum: {df.index[-1]:%d.%m.%Y} · kapanış {df['close'].iloc[-1]:,.0f} USDT",
-             f"Genel: {icon} {label} — {summ['cheap']} ucuz · {summ['normal']} normal · {summ['hot']} şişmiş ({summ['n']} göstergeden)"]
-    if prev_zone in ZONE_TEXT and prev_zone != summ["zone"]:
-        p_icon, p_label = ZONE_TEXT[prev_zone]
+             f"Genel: {icon} {label}" + (f" — {_score_line(summ)}" if summ["n"] else "")]
+    if prev_rating in RATING_TEXT and prev_rating != summ["key"]:
+        p_icon, p_label = RATING_TEXT[prev_rating]
         lines.append(f"Önceki rapor: {p_icon} {p_label} → değişti")
-    if trend["state"] == trend["state"]:  # NaN değilse
-        t_icon, t_label = TREND_TEXT[trend["state"]]
-        lines.append(f"Trend yönü: {t_icon} {t_label} — {trend['text']}" + (" 🆕 yeni kesişim" if trend["fresh"] else ""))
-        lines.append(f"   {trend['last_text']}")
-    else:
-        lines.append(f"Trend yönü: ❔ {trend['text']}")
-    for zone, g_icon, g_label in GROUPS:
-        group = [r for r in rows if r["zone"] == zone]
+    for grade in (2, 1, 0, -1, -2):
+        group = [r for r in rows if r["grade"] == grade]
         if group:
-            lines.append(f"\n{g_icon} {g_label} ({len(group)})")
+            lines.append(f"\n{LEVELS[grade][0]} {LEVEL_TITLE[grade]} ({len(group)})")
             lines += [f"• {r['name']}: {r['text']}" + (f" — {r['note']}" if r["note"] else "") for r in group]
-    missing = [r for r in rows if r["zone"] != r["zone"]]  # NaN
+    missing = [r for r in rows if r["grade"] != r["grade"]]  # NaN
     if missing:
         lines.append(f"\n❔ Yetersiz veri ({len(missing)})")
         lines += [f"• {r['name']}" for r in missing]
@@ -77,7 +83,7 @@ def _indicator_block(tf: str, results, prev_zone: str | None) -> list[str]:
 
 def cross_message(tf: str, ts, kind: int, results) -> str:
     df, raw, rows, summ, trend = results[tf]
-    icon, label = ZONE_TEXT[summ["zone"]]
+    icon, label = RATING_TEXT[summ["key"]]
     fast, slow = trend["fast"], trend["slow"]
     golden = kind == 1
     close = raw["close"].loc[ts]
@@ -85,17 +91,17 @@ def cross_message(tf: str, ts, kind: int, results) -> str:
         f"{'🟢' if golden else '🔴'} BTC {TF_UP[tf]} — {'GOLDEN CROSS (olumlu sinyal)' if golden else 'DEAD CROSS (olumsuz sinyal)'}",
         f"{ts:%d.%m.%Y} mumu kapandı: hızlı ortalama (SMA{fast}), yavaş ortalamayı (SMA{slow}) {'yukarı' if golden else 'aşağı'} kesti. "
         f"Kapanış {close:,.0f} USDT.",
-        f"Şu anki fiyat seviyesi: {icon} {label} ({summ['cheap']} ucuz · {summ['normal']} normal · {summ['hot']} şişmiş)",
+        f"Şu anki genel derece: {icon} {label}" + (f" — {_score_line(summ)}" if summ["n"] else ""),
         "Not: Kesişim gecikmeli bir onay sinyalidir; fiyat çoğu zaman haftalardır o yönde hareket ediyordur. "
         "Bitcoin'de ortalamalar sık kesiştiği için yanlış alarm da olabilir.",
         "", DISCLAIMER])
 
 
-def report_message(results, prev_zones: dict | None = None, first_run: bool = False) -> str:
-    head = "🆕 Bot yeni düzene geçti · BTC dip/şişkinlik raporu" if first_run else "📊 BTC DİP / ŞİŞKİNLİK RAPORU"
+def report_message(results, prev_ratings: dict | None = None, first_run: bool = False) -> str:
+    head = "🆕 Bot yeni düzene geçti · BTC gösterge dereceleri" if first_run else "📊 BTC GÖSTERGE DERECELERİ"
     parts = [f"{head} — {datetime.now(IST):%d.%m.%Y}", ""]
     for tf in TF_UP:
-        parts += _indicator_block(tf, results, (prev_zones or {}).get(tf)) + [""]
+        parts += _indicator_block(tf, results, (prev_ratings or {}).get(tf)) + [""]
     parts += [HOW_TO_READ, "", DISCLAIMER]
     return "\n".join(parts)
 
@@ -133,10 +139,10 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
         results[tf] = analyze(df, tf, cfg, fg_info)
 
     state = load_state(state_path)
-    prev_zones = {tf: state.get(f"zone_{tf}") for tf in TF_UP}
+    prev_ratings = {tf: state.get(f"rating_{tf}") for tf in TF_UP}
 
     if status_only:
-        msgs = [report_message(results, prev_zones)]
+        msgs = [report_message(results, prev_ratings)]
         news_msg, _ = _news_message(cfg, state.get("news_hist", {}))
         if news_msg:
             msgs.append(news_msg)
@@ -145,6 +151,8 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
         return msgs
 
     messages, new_state = [], dict(state)
+    for old in ("1d", "1w", "zone_1d", "zone_1w"):  # eski sürümlerin kalıntıları
+        new_state.pop(old, None)
     if cfg.get("cross_alerts", True):  # yeni golden/dead cross olursa ayrı bir uyarı (ilk çalışmada yalnızca durum kaydedilir)
         for tf in TF_UP:
             raw, evs = results[tf][1], cross_events(results[tf][1])
@@ -153,15 +161,13 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
                 since = pd.Timestamp(seen) if seen else None
                 messages += [cross_message(tf, ts, k, results) for ts, k in cross_events(raw, since)[-MAX_CROSS_ALERTS:]]
             new_state[f"cross_{tf}"] = evs[-1][0].isoformat() if evs else ""
-    new_state.pop("1d", None)  # eski al-sat sürümünün kalıntıları
-    new_state.pop("1w", None)
     today = f"{datetime.now(IST):%Y-%m-%d}"
-    first_run = any(z is None for z in prev_zones.values())
+    first_run = any(r is None for r in prev_ratings.values())
     if first_run or (cfg.get("daily_report", True) and state.get("last_report") != today):
-        messages.append(report_message(results, prev_zones, first_run=first_run))
+        messages.append(report_message(results, prev_ratings, first_run=first_run))
         new_state["last_report"] = today  # günde en fazla bir rapor
         for tf in TF_UP:
-            new_state[f"zone_{tf}"] = results[tf][3]["zone"]
+            new_state[f"rating_{tf}"] = results[tf][3]["key"]
     if state.get("last_news") != today:
         news_msg, new_state["news_hist"] = _news_message(cfg, state.get("news_hist", {}))
         if news_msg:
