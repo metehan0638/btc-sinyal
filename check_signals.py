@@ -86,13 +86,31 @@ def _indicator_summary(results, asset: dict) -> list[str]:
     lines = [f"🪙 {asset['ticker']} — {asset['name']}"]
     for tf, timeframe in TF_TR.items():
         lines.append(f"\n📅 {timeframe.upper()}")
+        positive, neutral, negative, missing = [], [], [], []
         for key, label in REPORT_INDICATORS:
             if key == "fear_greed" and tf != "1d":
                 continue  # Fear & Greed yalnızca günlük raporda anlamlıdır.
             row = rows_by_tf[tf].get(key)
             grade = row.get("grade") if row else float("nan")
-            signal = "— Veri yok" if pd.isna(grade) else f"{LEVELS[int(grade)][0]} {SIGNAL_LABELS[int(grade)]}"
-            lines.append(f"• {label}: {signal}")
+            if pd.isna(grade):
+                missing.append((label, "— Veri yok"))
+                continue
+            grade = int(grade)
+            signal = f"{LEVELS[grade][0]} {SIGNAL_LABELS[grade]}"
+            (positive if grade > 0 else neutral if grade == 0 else negative).append((grade, label, signal))
+
+        sections = (
+            ("🟢 POZİTİF", sorted(positive, key=lambda item: -item[0])),
+            ("⚪ NÖTR", neutral),
+            ("🔴 OLUMSUZ", sorted(negative, key=lambda item: -item[0])),
+        )
+        for title, indicators in sections:
+            if indicators:
+                lines.append(f"  {title}")
+                lines.extend(f"  • {label}: {signal}" for _, label, signal in indicators)
+        if missing:
+            lines.append("  — VERİ YOK")
+            lines.extend(f"  • {label}: {signal}" for label, signal in missing)
     return lines
 
 

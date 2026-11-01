@@ -45,6 +45,15 @@ with tempfile.TemporaryDirectory() as tmp:
         assert k in m1[0], f"rapor eksik: {k}"
     assert m1[0].count("Fear & Greed:") == 2, "Fear & Greed yalnızca coin başına günlük bölümde olmalı"
     assert m1[0].count("SMA kesişimi:") == 6, "kesişim her coin ve zaman diliminde gösterilmeli"
+    btc_report = m1[0].split("🪙 BTC — Bitcoin", 1)[1].split("🪙 ETH — Ethereum", 1)[0]
+    group_order = ("🟢 POZİTİF", "⚪ NÖTR", "🔴 OLUMSUZ", "— VERİ YOK")
+    for timeframe in ("GÜNLÜK", "HAFTALIK", "AYLIK"):
+        start = btc_report.index(f"📅 {timeframe}")
+        next_timeframe = btc_report.find("📅 ", start + 1)
+        section = btc_report[start: next_timeframe if next_timeframe >= 0 else len(btc_report)]
+        present = [heading for heading in group_order if heading in section]
+        actual = [heading for _, heading in sorted((section.index(heading), heading) for heading in present)]
+        assert actual == present, f"{timeframe} göstergeleri pozitif/nötr/olumsuz sırasına uymuyor"
     for bad in ("Son mum:", "kapanış", "bulut üstünde", "aşırı satım", "Nasıl okunur", "GİRİŞ", "ÇIKIŞ",
                 "pozisyon", "backtest", "DİP BÖLGESİ", "ŞİŞMİŞ BÖLGE", "Trend yönü"):
         assert bad not in m1[0], f"eski dil kalmış: {bad}"
