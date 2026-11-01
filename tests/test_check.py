@@ -26,7 +26,8 @@ with tempfile.TemporaryDirectory() as tmp:
     st, sent = Path(tmp) / "state.json", []
     # 1) ilk çalışma: yeni düzen raporu + derece durumu kaydedilir
     m1 = cs.run(cfg, sent.append, state_path=st, fetch=fetch, fetch_fg=lambda: fg)
-    assert len(m1) == 1 and "KRİPTO TAKİP PANELİ" in m1[0] and st.exists()
+    assert len(m1) == 2 and "KRİPTO TAKİP PANELİ" in m1[0] and " (1/2)" in m1[0] \
+        and "KRİPTO TAKİP PANELİ" in m1[1] and " (2/2)" in m1[1] and st.exists()
     assert not any("HYPE RAPORU" in message for message in m1), "Telegram'a haber raporu gönderilmemeli"
     assert len(fetch_calls) == 12 and {symbol for symbol, _, _ in fetch_calls} == {
         "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"}
@@ -36,12 +37,14 @@ with tempfile.TemporaryDirectory() as tmp:
     assert all(len(message) < 4096 for message in m1), "coin başına Telegram raporu ileti sınırını aşmamalı"
     assert all(any(f"🪙 {ticker}" in message for message in m1)
                for ticker in ("BTC", "ETH", "SOL", "XRP"))
-    for k in ("Gösterge | Günlük | Haftalık | Aylık", "RSI |", "Stoch RSI |", "Bollinger |",
-              "MFI |", "Fiyat/SMA |", "ATH düşüşü |", "Ichimoku |", "Fear & Greed |",
-              "SMA kesişimi |", "Güçlü al", "Veri yok", "tavsiyesi değildir"):
+    assert all(ticker in m1[0] for ticker in ("BTC", "ETH"))
+    assert all(ticker in m1[1] for ticker in ("SOL", "XRP"))
+    for k in ("📅 GÜNLÜK", "📅 HAFTALIK", "📅 AYLIK", "RSI:", "Stoch RSI:", "Bollinger:",
+              "MFI:", "Fiyat/SMA:", "ATH düşüşü:", "Ichimoku:", "Fear & Greed:",
+              "SMA kesişimi:", "Güçlü al", "tavsiyesi değildir"):
         assert k in m1[0], f"rapor eksik: {k}"
-    assert m1[0].count("Fear & Greed |") == 4, "Fear & Greed her coin için yalnızca günlük sinyali göstermeli"
-    assert m1[0].count("SMA kesişimi |") == 4, "kesişim her coin için bir satırda gösterilmeli"
+    assert m1[0].count("Fear & Greed:") == 2, "Fear & Greed yalnızca coin başına günlük bölümde olmalı"
+    assert m1[0].count("SMA kesişimi:") == 6, "kesişim her coin ve zaman diliminde gösterilmeli"
     for bad in ("Son mum:", "kapanış", "bulut üstünde", "aşırı satım", "Nasıl okunur", "GİRİŞ", "ÇIKIŞ",
                 "pozisyon", "backtest", "DİP BÖLGESİ", "ŞİŞMİŞ BÖLGE", "Trend yönü"):
         assert bad not in m1[0], f"eski dil kalmış: {bad}"
@@ -57,11 +60,11 @@ with tempfile.TemporaryDirectory() as tmp:
     # 3) yeni gün: tek rapor; artık ağırlıklı genel derece/önceki derece yok
     s["last_report"] = "2000-01-01"; rd(s, st)
     r1 = cs.run(cfg, sent.append, state_path=st, fetch=fetch, fetch_fg=lambda: fg)
-    assert len(r1) == 1 and "KRİPTO TAKİP PANELİ" in r1[0] and "Genel:" not in r1[0]
+    assert len(r1) == 2 and "KRİPTO TAKİP PANELİ" in r1[0] and "Genel:" not in r1[0]
     assert cs.run(cfg, sent.append, state_path=st, fetch=fetch, fetch_fg=lambda: fg) == []
     # 3b) --report her zaman gönderir
     status_reports = cs.run(cfg, sent.append, status_only=True, state_path=st, fetch=fetch, fetch_fg=lambda: fg)
-    assert len(status_reports) == 1 and all("KRİPTO TAKİP PANELİ" in message for message in status_reports)
+    assert len(status_reports) == 2 and all("KRİPTO TAKİP PANELİ" in message for message in status_reports)
     # 3c) yeni kesişim olursa ayrı uyarı: durumu bir önceki kesişimden öncesine al -> yalnızca sonraki kesişim bildirilir, bir kez
     evs = cross_events(compute_metrics(df, cfg["timeframes"]["1d"]))
     assert len(evs) >= 2, "sentetik veride yeterli kesişim yok, test verisini değiştir"
@@ -87,7 +90,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # 5) Fear & Greed çökerse rapor yine gider (o satır olmadan)
     def fg_down(): raise RuntimeError("Fear & Greed endeksi alınamadı: test")
     m5 = cs.run(cfg, sent.append, state_path=Path(tmp) / "s5.json", fetch=fetch, fetch_fg=fg_down)
-    assert m5 and "Fear & Greed | — | — | —" in m5[0] and "RSI |" in m5[0]
+    assert m5 and "Fear & Greed: — Veri yok" in m5[0] and "RSI:" in m5[0]
     # 6) kısa geçmiş (yedek borsa) -> yanlış rapor yerine hata
     try: cs.run(cfg, sent.append, state_path=Path(tmp) / "s6.json", fetch=lambda *a: df.iloc[:200], fetch_fg=lambda: fg); assert False
     except RuntimeError as e: assert "en az" in str(e)
@@ -96,7 +99,7 @@ with tempfile.TemporaryDirectory() as tmp:
     rd({"1d": "2026-10-27T00:00:00+00:00", "1w": "2026-10-19T00:00:00+00:00", "zone_1d": "dip", "zone_1w": "normal",
         "last_report": "2026-10-28", "news_hist": {}}, old)
     m7 = cs.run(cfg, sent.append, state_path=old, fetch=fetch, fetch_fg=lambda: fg)
-    assert m7 and "KRİPTO TAKİP PANELİ" in m7[0]
+    assert m7 and len(m7) == 2 and "KRİPTO TAKİP PANELİ" in m7[0]
     s7 = json.loads(old.read_text(encoding="utf-8"))
     assert not {"1d", "1w", "zone_1d", "zone_1w"} & set(s7) and not any(k.startswith("rating_") for k in s7)
     print("ÖRNEK RAPOR:\n" + m1[0] + "\n")
