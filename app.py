@@ -15,12 +15,12 @@ from core.zones import (LEVELS, LEVEL_TITLE, METRIC_KEYS, MIN_BARS, RATING_TEXT,
                         summarize, trend_info)
 
 CFG = yaml.safe_load(open(Path(__file__).parent / "config.yaml", encoding="utf-8"))
-TF_LABEL = {"1d": "Günlük", "1w": "Haftalık"}
+TF_LABEL = {"1d": "Günlük", "1w": "Haftalık", "1M": "Aylık"}
 GRADE_NAME = {g: f"{icon} {LEVEL_TITLE[g]}" for g, (icon, _) in LEVELS.items()}
 RATING_TH = tuple(CFG.get("rating_thresholds") or (0.3, 1.0))
 BAND_COLORS = ["#1b5e20", "#66bb6a", "#ef5350", "#b71c1c"]  # t1 güçlü al, t2 al, t3 sat, t4 güçlü sat
 
-st.set_page_config(page_title="BTC Gösterge Dereceleri", page_icon="₿", layout="wide")
+st.set_page_config(page_title="Kripto Takip Paneli", page_icon="₿", layout="wide")
 
 # ---------------- kenar çubuğu ----------------
 if "nonce" not in st.session_state:
@@ -31,8 +31,6 @@ with st.sidebar:
         st.session_state.nonce += 1
     st.caption("Veri 1 saat önbelleğe alınır. Hesaplar yalnızca KAPANMIŞ mumlara göre yapılır. "
                "Derece aralıklarını config.yaml içinden değiştirebilirsin.")
-    st.warning("Dereceler göstergelerin değerlerine bakan mekanik etiketlerdir; emir ya da yatırım tavsiyesi değildir. "
-               "Aşırı satım, dipte olunduğunu garanti etmez; düşüş trendinde uzun süre sürebilir.")
 
 
 @st.cache_data(ttl=3600, show_spinner="Mum verisi alınıyor...")
@@ -84,20 +82,17 @@ def rating_delta(summ):
 
 
 # ---------------- başlık + özet ----------------
-st.title(f"₿ {CFG['symbol']} — Gösterge Dereceleri")
-cols = st.columns(3)
-for col, tf in zip(cols[:2], TF_LABEL):
+st.title("Kripto Takip Paneli")
+cols = st.columns(4)
+for col, tf in zip(cols[:3], TF_LABEL):
     df, raw, rows, summ, _, _trend = data[tf]
     icon, label = RATING_TEXT[summ["key"]]
     col.metric(f"{TF_LABEL[tf]} ({df.index[-1].date()} kapanışı)", f"{icon} {label}", rating_delta(summ), delta_color="off")
 if fg_info:
-    cols[2].metric("Fear & Greed", f"{fg_info['value']:.0f} · {fg_info['label']}",
+    cols[3].metric("Fear & Greed", f"{fg_info['value']:.0f} · {fg_info['label']}",
                    f"dün {fg_info['yesterday']:.0f}" if fg_info["yesterday"] is not None else None, delta_color="off")
 else:
-    cols[2].metric("Fear & Greed", "-")
-st.caption("Her gösterge değerine göre 🟢🟢 güçlü al · 🟢 al · ⚪ nötr · 🔴 sat · 🔴🔴 güçlü sat dereceleri alır; "
-           "AL tarafı fiyatın ucuz/dip tarafında, SAT tarafı şişmiş tarafında olduğunu gösterir. Genel derece puan ortalamasından çıkar.")
-
+    cols[3].metric("Fear & Greed", "-")
 for tf_, (df_, *_rest) in data.items():
     if len(df_) < MIN_BARS[tf_]:
         st.warning(f"{TF_LABEL[tf_]}: yalnızca {len(df_)} mum alındı (en az {MIN_BARS[tf_]} beklenir). "

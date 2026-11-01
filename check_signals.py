@@ -31,8 +31,8 @@ from core.zones import (LEVEL_TITLE, LEVELS, MIN_BARS, RATING_TEXT, compute_metr
 
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.json"
-TF_UP = {"1d": "GÜNLÜK", "1w": "HAFTALIK"}
-TF_TR = {"1d": "Günlük", "1w": "Haftalık"}
+TF_UP = {"1d": "GÜNLÜK", "1w": "HAFTALIK", "1M": "AYLIK"}
+TF_TR = {"1d": "Günlük", "1w": "Haftalık", "1M": "Aylık"}
 DISCLAIMER = "⚠️ Yatırım tavsiyesi değildir."
 HOW_TO_READ = ("Nasıl okunur: her gösterge değerine göre 5 dereceden birine girer (güçlü al · al · nötr · sat · güçlü sat); "
                "AL tarafı fiyatın ucuz/dip tarafında, SAT tarafı şişmiş tarafında olduğunu gösterir. "
@@ -151,7 +151,7 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
         return msgs
 
     messages, new_state = [], dict(state)
-    for old in ("1d", "1w", "zone_1d", "zone_1w"):  # eski sürümlerin kalıntıları
+    for old in ("1d", "1w", "1M", "zone_1d", "zone_1w"):  # eski sürümlerin kalıntıları
         new_state.pop(old, None)
     if cfg.get("cross_alerts", True):  # yeni golden/dead cross olursa ayrı bir uyarı (ilk çalışmada yalnızca durum kaydedilir)
         for tf in TF_UP:

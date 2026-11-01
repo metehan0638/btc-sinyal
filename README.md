@@ -17,17 +17,19 @@ Bu dereceler göstergelerin değerlerine bakan **mekanik etiketlerdir; emir ya d
 | MFI(14) | 10 | 20 | arası | 80 | 90 |
 | Fiyat / 200 ortalama, günlük (Mayer) | 0.8 | 1.0 | arası | 2.0 | 2.4 |
 | Fiyat / 200 ortalama, haftalık | 1.0 | 1.3 | arası | 2.5 | 3.5 |
+| Fiyat / 24 ortalama, aylık | 1.0 | 1.3 | arası | 2.5 | 3.5 |
 | ATH'den uzaklık (%) | -65 | -50 | arası | -10 | -3 |
 | Fear & Greed (yalnızca günlük) | 10 | 24 | arası | 75 | 90 |
-| Golden/Dead cross (SMA 50/200) | yeni golden cross | golden yapısı | — | dead yapısı | yeni dead cross |
+| Golden/Dead cross (zaman dilimine özel SMA) | yeni golden cross | golden yapısı | — | dead yapısı | yeni dead cross |
 
 Golden/dead cross aralıkla değil duruma göre puanlanır: hızlı SMA yavaşın üstündeyse AL (+1), altındaysa SAT (-1);
-kesişim yeniyse (günlük 14, haftalık 4 mum içinde) güçlü AL/SAT (±2). Kesişim gecikmeli bir onay sinyalidir.
+kesişim yeniyse (günlük 14, haftalık 4, aylık 2 mum içinde) güçlü AL/SAT (±2). Kesişim gecikmeli bir onay sinyalidir.
+Günlük ve haftalıkta SMA 50/200, aylıkta SMA 6/18 kullanılır.
 Yeni bir kesişim olunca raporun dışında ayrıca uyarı gelir (`cross_alerts: false` ile kapatılır).
 
 **Genel derece:** her gösterge -2 (güçlü sat) ile +2 (güçlü al) arasında puan alır; geçerli göstergelerin ortalaması
 ≥ 1.0 güçlü al, ≥ 0.3 al, -0.3 ile 0.3 arası nötr, ≤ -0.3 sat, ≤ -1.0 güçlü sat demektir.
-Günlük ve haftalık ayrı değerlendirilir. Tüm aralıklar ve sınırlar `config.yaml` içinden değiştirilebilir; bunlar **başlangıç değerleridir**.
+Günlük, haftalık ve aylık ayrı değerlendirilir. Tüm aralıklar ve sınırlar `config.yaml` içinden değiştirilebilir; bunlar **başlangıç değerleridir**.
 
 > **Sınırlar:** Aşırı satım, dipte olunduğunu garanti etmez; düşüş trendinde göstergeler uzun süre AL tarafında kalabilir.
 > Dip arayan (RSI, Mayer vb.) ve trend izleyen (cross) göstergeler zaman zaman zıt yönde okunur; ortalama bunları birbirine karıştırır.
@@ -35,7 +37,7 @@ Günlük ve haftalık ayrı değerlendirilir. Tüm aralıklar ve sınırlar `con
 
 ## Raporda ne var?
 
-- Günlük ve haftalık: genel derece, puan ortalaması, her göstergenin değeri ve derecesi (güçlü al'dan güçlü sat'a gruplanmış), bir önceki rapora göre derece değişimi
+- Günlük, haftalık ve aylık: genel derece, puan ortalaması, her göstergenin değeri ve derecesi (güçlü al'dan güçlü sat'a gruplanmış), bir önceki rapora göre derece değişimi
 - Fear & Greed (günlük puana dahil) ve haber/hype raporu (kategori ve coin bazında öne çıkan konular)
 - Yeni golden/dead cross olunca ayrı bir uyarı mesajı
 

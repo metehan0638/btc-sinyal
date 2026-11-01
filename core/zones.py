@@ -26,7 +26,8 @@ DEFAULT_BANDS = {
     "fear_greed": (10, 24, 75, 90),         # alternative.me: 0-24 aşırı korku, 75-100 aşırı açgözlülük
 }
 # zaman dilimine özel varsayılanlar (config'teki `bands` bunların üzerine yazar)
-TF_BANDS = {"1w": {"ma_ratio": (1.0, 1.3, 2.5, 3.5)}}  # haftalıkta fiyat / 200 haftalık ortalama
+TF_BANDS = {"1w": {"ma_ratio": (1.0, 1.3, 2.5, 3.5)},
+            "1M": {"ma_ratio": (1.0, 1.3, 2.5, 3.5)}}  # haftalık/aylıkta fiyat / uzun ortalama
 
 # (AL yönündeki ifade, SAT yönündeki ifade)
 NOTES = {
@@ -40,10 +41,10 @@ NOTES = {
 }
 METRIC_KEYS = ["rsi", "stochrsi", "bollinger", "mfi", "ma_ratio", "drawdown"]
 # bundan kısa geçmişle değerler güvenilmez (yedek borsaya düşülmüş olabilir)
-MIN_BARS = {"1d": 1500, "1w": 250}
-UNIT = {"1d": "günlük", "1w": "haftalık"}
-BAR_NAME = {"1d": "gün", "1w": "hafta"}
-FRESH_BARS = {"1d": 14, "1w": 4}  # son kesişim bu kadar mum içindeyse "yeni" sayılır (cross +-2 puan)
+MIN_BARS = {"1d": 1500, "1w": 250, "1M": 36}
+UNIT = {"1d": "günlük", "1w": "haftalık", "1M": "aylık"}
+BAR_NAME = {"1d": "gün", "1w": "hafta", "1M": "ay"}
+FRESH_BARS = {"1d": 14, "1w": 4, "1M": 2}  # son kesişim bu kadar mum içindeyse "yeni" sayılır (cross +-2 puan)
 
 LEVELS = {2: ("🟢🟢", "GÜÇLÜ AL"), 1: ("🟢", "AL"), 0: ("⚪", "NÖTR"), -1: ("🔴", "SAT"), -2: ("🔴🔴", "GÜÇLÜ SAT")}
 LEVEL_TITLE = {2: "Güçlü al", 1: "Al", 0: "Nötr", -1: "Sat", -2: "Güçlü sat"}
