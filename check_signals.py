@@ -24,7 +24,7 @@ from core import sentiment
 from core.data import get_candles
 from core.notifier import get_chats, load_env, send_telegram
 from core.sentiment import fetch_fear_greed
-from core.zones import (LEVEL_TITLE, LEVELS, MIN_BARS, RATING_TEXT, compute_metrics, cross_events, latest_rows,
+from core.zones import (LEVELS, MIN_BARS, RATING_TEXT, compute_metrics, cross_events, latest_rows,
                         trend_info)
 
 ROOT = Path(__file__).resolve().parent
@@ -32,11 +32,20 @@ STATE_FILE = ROOT / "state.json"
 TF_UP = {"1d": "GÜNLÜK", "1w": "HAFTALIK", "1M": "AYLIK"}
 TF_TR = {"1d": "Günlük", "1w": "Haftalık", "1M": "Aylık"}
 DISCLAIMER = "⚠️ Yatırım tavsiyesi değildir."
-HOW_TO_READ = ("Nasıl okunur: her gösterge değerine göre 5 dereceden birine girer (güçlü al · al · nötr · sat · güçlü sat); "
-               "AL tarafı fiyatın ucuz/dip tarafında, SAT tarafı şişmiş tarafında olduğunu gösterir. "
-               "Bunlar mekanik derecelerdir, emir değildir; aşırı satım düşüş trendinde uzun süre sürebilir.")
 IST = timezone(timedelta(hours=3))  # Türkiye saati
 MAX_CROSS_ALERTS = 2  # uzun süre çalışmamışsa en fazla bu kadar geçmiş kesişim uyarısı gönderilir
+MAX_REPORT_CHARS = 3800  # Telegram'ın 4096 karakter sınırına güvenli pay bırak
+REPORT_INDICATORS = (
+    ("rsi", "RSI"),
+    ("stochrsi", "Stoch RSI"),
+    ("bollinger", "Bollinger"),
+    ("mfi", "MFI"),
+    ("ma_ratio", "Fiyat/SMA"),
+    ("drawdown", "ATH düşüşü"),
+    ("ichimoku", "Ichimoku"),
+    ("fear_greed", "Fear & Greed"),
+    ("cross", "SMA kesişimi"),
+)
 
 
 def configured_assets(cfg: dict) -> list[dict]:
@@ -71,20 +80,16 @@ def analyze(df, tf: str, cfg: dict, fg_info: dict | None = None):
     return df, raw, rows, trend_info(raw, params, tf)
 
 
-def _indicator_block(tf: str, results, asset: dict) -> list[str]:
-    df, raw, rows, trend = results[tf]
-    quote = asset["symbol"].split("/")[-1]
-    lines = [f"━━ {TF_UP[tf]} ━━",
-             f"Son mum: {df.index[-1]:%d.%m.%Y} · kapanış {df['close'].iloc[-1]:,.8g} {quote}"]
-    for grade in (2, 1, 0, -1, -2):
-        group = [r for r in rows if r["grade"] == grade]
-        if group:
-            lines.append(f"\n{LEVELS[grade][0]} {LEVEL_TITLE[grade]} ({len(group)})")
-            lines += [f"• {r['name']}: {r['text']}" + (f" — {r['note']}" if r["note"] else "") for r in group]
-    missing = [r for r in rows if r["grade"] != r["grade"]]  # NaN
-    if missing:
-        lines.append(f"\n❔ Yetersiz veri ({len(missing)})")
-        lines += [f"• {r['name']}" for r in missing]
+def _compact_indicator_table(results, asset: dict) -> list[str]:
+    rows_by_tf = {tf: {row["key"]: row for row in results[tf][2]} for tf in TF_UP}
+    lines = [f"🪙 {asset['ticker']}", "Gösterge | Günlük | Haftalık | Aylık"]
+    for key, label in REPORT_INDICATORS:
+        signals = []
+        for tf in TF_UP:
+            row = rows_by_tf[tf].get(key)
+            grade = row.get("grade") if row else float("nan")
+            signals.append("—" if pd.isna(grade) else LEVELS[int(grade)][0])
+        lines.append(f"{label} | " + " | ".join(signals))
     return lines
 
 
@@ -104,15 +109,30 @@ def cross_message(tf: str, ts, kind: int, results, asset: dict | None = None) ->
         "", DISCLAIMER])
 
 
-def report_message(results, first_run: bool = False, asset: dict | None = None) -> str:
-    asset = asset or {"ticker": "BTC", "name": "Bitcoin", "symbol": "BTC/USDT"}
+def report_messages(results_by_ticker, assets: list[dict], first_run: bool = False) -> list[str]:
     icon = "🆕" if first_run else "📊"
-    head = f"{icon} {asset['ticker']} GÖSTERGE DURUMU — {asset['name']} ({asset['symbol']})"
-    parts = [f"{head} — {datetime.now(IST):%d.%m.%Y}", ""]
-    for tf in TF_UP:
-        parts += _indicator_block(tf, results, asset) + [""]
-    parts += [HOW_TO_READ, "", DISCLAIMER]
-    return "\n".join(parts)
+    header = [f"{icon} KRİPTO TAKİP PANELİ · {datetime.now(IST):%d.%m.%Y}",
+              "🟢🟢 Güçlü al · 🟢 Al · ⚪ Nötr · 🔴 Sat · 🔴🔴 Güçlü sat · — Veri yok"]
+    footer = DISCLAIMER
+    messages, current_sections = [], []
+
+    def render(sections):
+        return "\n\n".join(["\n".join(header), *("\n".join(section) for section in sections), footer])
+
+    for asset in assets:
+        section = _compact_indicator_table(results_by_ticker[asset["ticker"]], asset)
+        candidate = render([*current_sections, section])
+        if len(candidate) > MAX_REPORT_CHARS and current_sections:
+            messages.append(render(current_sections))
+            current_sections = [section]
+        else:
+            current_sections.append(section)
+
+    if current_sections:
+        messages.append(render(current_sections))
+    if any(len(message) > MAX_REPORT_CHARS for message in messages):
+        raise ValueError("Bir coin için gösterge tablosu Telegram mesaj sınırını aşıyor.")
+    return messages
 
 
 def load_state(path: Path) -> dict:
@@ -142,7 +162,7 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
 
     state = load_state(state_path)
     if status_only:
-        msgs = [report_message(results_by_ticker[asset["ticker"]], asset=asset) for asset in assets]
+        msgs = report_messages(results_by_ticker, assets)
         for m in msgs:
             send(m)
         return msgs
@@ -166,8 +186,7 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
     today = f"{datetime.now(IST):%Y-%m-%d}"
     first_run = not state.get("last_report")
     if first_run or (cfg.get("daily_report", True) and state.get("last_report") != today):
-        messages += [report_message(results_by_ticker[asset["ticker"]], first_run=first_run, asset=asset)
-                     for asset in assets]
+        messages += report_messages(results_by_ticker, assets, first_run=first_run)
         new_state["last_report"] = today  # günde en fazla bir rapor
         for asset in assets:
             for tf in TF_UP:
