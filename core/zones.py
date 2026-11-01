@@ -1,4 +1,4 @@
-"""BTC için gösterge dereceleri. Her gösterge, değerine göre 5 dereceden birine yerleştirilir:
+"""Kripto varlık göstergeleri. Her gösterge, değerine göre 5 dereceden birine yerleştirilir:
 
    +2 GÜÇLÜ AL · +1 AL · 0 NÖTR · -1 SAT · -2 GÜÇLÜ SAT      (NaN = yetersiz veri)
 
@@ -100,6 +100,22 @@ def compute_metrics(df: pd.DataFrame, params: dict | None = None) -> pd.DataFram
     raw["ath"] = h.cummax()
     raw["drawdown"] = (c / raw["ath"] - 1) * 100
 
+    # Ichimoku 9/26/52: bulut değerleri 26 mum ötelendiğinden geçmiş veriye bakılır.
+    tenkan_n, kijun_n, span_b_n = p.get("ichimoku", (9, 26, 52))
+    midpoint = lambda n: (h.rolling(n).max() + l.rolling(n).min()) / 2
+    tenkan, kijun = midpoint(tenkan_n), midpoint(kijun_n)
+    raw["ichimoku_tenkan"], raw["ichimoku_kijun"] = tenkan, kijun
+    raw["ichimoku_span_a"] = ((tenkan + kijun) / 2).shift(kijun_n)
+    raw["ichimoku_span_b"] = midpoint(span_b_n).shift(kijun_n)
+    top = pd.concat([raw["ichimoku_span_a"], raw["ichimoku_span_b"]], axis=1).max(axis=1)
+    bottom = pd.concat([raw["ichimoku_span_a"], raw["ichimoku_span_b"]], axis=1).min(axis=1)
+    valid_cloud = raw[["ichimoku_span_a", "ichimoku_span_b"]].notna().all(axis=1)
+    above, below = c > top, c < bottom
+    bullish = above & (tenkan > kijun) & (raw["ichimoku_span_a"] > raw["ichimoku_span_b"])
+    bearish = below & (tenkan < kijun) & (raw["ichimoku_span_a"] < raw["ichimoku_span_b"])
+    raw["ichimoku_grade"] = np.select([bullish, bearish, above & valid_cloud, below & valid_cloud], [2, -2, 1, -1], default=0)
+    raw.loc[~valid_cloud, "ichimoku_grade"] = np.nan
+
     # golden / dead cross: hızlı SMA yavaş SMA'yı yukarı keserse +1 (golden), aşağı keserse -1 (dead)
     fast_n, slow_n = p["cross"]
     if not fast_n < slow_n:
@@ -166,6 +182,7 @@ def _row(key, name, value, text, bands):
 def latest_rows(raw: pd.DataFrame, params: dict | None, tf: str, fg_info: dict | None = None) -> list[dict]:
     """Son mum için gösterge satırları (derecesiyle). Fear & Greed yalnızca verilirse (günlükte) eklenir."""
     p = _params(params)
+    tenkan_n, kijun_n, span_b_n = p.get("ichimoku", (9, 26, 52))
     b, last = bands_for(params, tf), raw.iloc[-1]
     unit, ma = UNIT[tf], last["ma_ratio"]
     rows = [
@@ -177,6 +194,18 @@ def latest_rows(raw: pd.DataFrame, params: dict | None, tf: str, fg_info: dict |
              f"{ma:.2f} (ortalamanın %{abs(ma - 1) * 100:.0f} {'üstünde' if ma >= 1 else 'altında'})" if pd.notna(ma) else "-", b),
         _row("drawdown", "ATH'den uzaklık", last["drawdown"], f"%{last['drawdown']:.1f} (ATH {last['ath']:,.0f})", b),
     ]
+    span_a, span_b = last["ichimoku_span_a"], last["ichimoku_span_b"]
+    if pd.notna(span_a) and pd.notna(span_b) and pd.notna(last["ichimoku_grade"]):
+        cloud_top, cloud_bottom = max(span_a, span_b), min(span_a, span_b)
+        close = last["close"]
+        grade = int(last["ichimoku_grade"])
+        position = "bulut üstünde" if close > cloud_top else "bulut altında" if close < cloud_bottom else "bulut içinde"
+        cross = "Tenkan > Kijun" if last["ichimoku_tenkan"] > last["ichimoku_kijun"] else "Tenkan < Kijun" if last["ichimoku_tenkan"] < last["ichimoku_kijun"] else "Tenkan = Kijun"
+        cloud = "bulut yükseliş yönlü" if last["ichimoku_span_a"] > last["ichimoku_span_b"] else "bulut düşüş yönlü"
+        rows.append(dict(key="ichimoku", name=f"Ichimoku ({tenkan_n}/{kijun_n}/{span_b_n})", value=float(grade),
+                         text=f"{position} · {cross} · {cloud}", grade=grade, note=""))
+    else:
+        rows.append(dict(key="ichimoku", name=f"Ichimoku ({tenkan_n}/{kijun_n}/{span_b_n})", value=np.nan, text="-", grade=np.nan, note=""))
     if fg_info:
         hist = " · ".join(f"{n} {fg_info[k]:.0f}" for n, k in (("dün", "yesterday"), ("7g", "week"), ("30g", "month")) if fg_info.get(k) is not None)
         rows.append(_row("fear_greed", "Fear & Greed", fg_info["value"],

@@ -66,11 +66,12 @@ assert h == h2
 old = {f"2026-09-{d:02d}": {"_total": 1} for d in range(1, 20)}
 assert len(news.update_history(old, arts, NOW)) <= news.KEEP_DAYS
 
-# 6) tam rapor + sahte fetch
+# 6) UI analiz sonucu + sahte fetch ve geçmiş güncellemesi
 fetch = lambda feeds: (arts, ["CoinDesk", "Decrypt"], ["The Block"])
-msg, newhist = news.build_news_report({"a": "u", "b": "u", "c": "u"}, {}, fetch=fetch, now=NOW)
-assert "HYPE RAPORU" in msg and "Solana (SOL)" in msg and "Ulaşılamayan kaynaklar: The Block" in msg and len(msg) < 4000
-print(msg)
+articles, hype, newhist = news.analyze_with_history({"a": "u", "b": "u", "c": "u"}, {}, fetch=fetch, now=NOW)
+assert len(articles) == 9 and hype["n24"] == 8 and hype["failed"] == ["The Block"]
+assert any(row["label"] == "Solana (SOL)" for row in hype["coins"])
+assert newhist and not hasattr(news, "build_news_report"), "haber analizi UI için kalmalı, Telegram raporu kaldırılmalı"
 
 # 6b) güvensiz XML (ENTITY) reddedilir
 bomb = b'<?xml version="1.0"?><!DOCTYPE r [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;&a;">]><rss><channel><item><title>&b;</title></item></channel></rss>'
@@ -81,7 +82,7 @@ except ValueError:
 
 # 7) tek kaynak yetmez
 try:
-    news.build_news_report(None, {}, fetch=lambda f: (arts, ["CoinDesk"], ["x"]), now=NOW); assert False
+    news.analyze(None, {}, fetch=lambda f: (arts, ["CoinDesk"], ["x"]), now=NOW); assert False
 except news.NewsUnavailable as e:
-    print("\nuyarı OK:", e)
-print("\nTüm haber testleri geçti ✔")
+    print("Uyarı denetimi geçti:", e)
+print("All UI news analysis tests passed.")

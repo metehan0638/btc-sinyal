@@ -1,4 +1,4 @@
-name: BTC sinyal kontrol
+name: Kripto sinyal kontrol
 
 on:
   schedule:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: btc-check
+  group: crypto-check
   cancel-in-progress: false
 
 jobs:

@@ -39,6 +39,13 @@ def test_all():
     votes = grade_votes(raw)
     assert list(votes.columns) == METRIC_KEYS and set(np.unique(votes.dropna().values)) <= {-2.0, -1.0, 0.0, 1.0, 2.0}
 
+    # Aylık SOL geçmişi 9/26/52 Ichimoku bulutunun 78 mumluk ısınma süresinden kısa olabilir.
+    monthly_params = {"ma_long": 24, "cross": (6, 18), "ichimoku": (9, 26, 52)}
+    short_monthly_raw = compute_metrics(synthetic(60, seed=5), monthly_params)
+    short_monthly_rows = latest_rows(short_monthly_raw, monthly_params, "1M")
+    short_ichimoku = next(row for row in short_monthly_rows if row["key"] == "ichimoku")
+    assert pd.isna(short_ichimoku["grade"]) and short_ichimoku["text"] == "-"
+
     # 2) GELECEĞE BAKMAMA: son mumları silince önceki değerler değişmemeli (cross sütunları dahil)
     for cut in (600, 1000, 1400):
         a, b = raw.iloc[:cut], compute_metrics(df.iloc[:cut])
@@ -50,11 +57,11 @@ def test_all():
     assert g["rsi"] == g["mfi"] == g["ma_ratio"] == g["drawdown"] == 2, g
     assert g["cross"] == -1, "dead cross yapısı (eski kesişim, yeni değil) = SAT (-1)"
     s = summarize(down)
-    assert s["key"] == "strong_buy" and s["level"] == 2 and s["n"] == 6, s      # stochrsi tanımsız -> sayılmaz
+    assert s["key"] == "buy" and s["level"] == 1 and s["n"] == 7, s      # Ichimoku kendi derecesiyle ayrı satırdır
     up = latest_rows(compute_metrics(trend(100 * 1.01 ** np.arange(400))), {}, "1d")
     g = {r["key"]: r["grade"] for r in up}
     assert g["rsi"] == g["mfi"] == g["drawdown"] == -2 and g["ma_ratio"] == -1 and g["cross"] == 1, g
-    assert summarize(up)["key"] == "strong_sell"
+    assert summarize(up)["key"] == "sell"
 
     # 4) eşik sınırları: (güçlü al <= t1, al <= t2, nötr, sat >= t3, güçlü sat >= t4)
     def grade_at(key, tf="1d", **vals):
@@ -114,7 +121,7 @@ def test_all():
     with_fg = latest_rows(raw, {}, "1d", fg)
     fgrow = [r for r in with_fg if r["key"] == "fear_greed"][0]
     assert fgrow["grade"] == 1 and "dün 18" in fgrow["text"] and with_fg[-1]["key"] == "cross"
-    assert len(latest_rows(raw, {}, "1d")) == len(with_fg) - 1 == 7
+    assert len(latest_rows(raw, {}, "1d")) == len(with_fg) - 1 == 8
     assert [r for r in latest_rows(raw, {}, "1d", dict(fg, value=95.0, label="Aşırı açgözlülük")) if r["key"] == "fear_greed"][0]["grade"] == -2
     assert "haftalık" in [r for r in latest_rows(raw, {"ma_long": 50}, "1w") if r["key"] == "ma_ratio"][0]["name"]
 

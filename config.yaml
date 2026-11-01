@@ -2,11 +2,26 @@
 symbol: BTC/USDT
 exchanges: [binance, kraken, bitstamp]   # sırayla denenir, ilk çalışan kullanılır
 since: "2017-08-17"                      # Binance BTC/USDT başlangıcı
+assets:
+  - ticker: BTC
+    name: Bitcoin
+    symbol: BTC/USDT
+    since: "2017-08-17"
+  - ticker: ETH
+    name: Ethereum
+    symbol: ETH/USDT
+    since: "2017-08-17"
+  - ticker: SOL
+    name: Solana
+    symbol: SOL/USDT
+    since: "2020-08-11"
+  - ticker: XRP
+    name: XRP
+    symbol: XRP/USDT
+    since: "2018-05-04"
 
 # Her gösterge değerine göre -2..+2 puan alır (güçlü sat -2, sat -1, nötr 0, al +1, güçlü al +2).
-# Genel derece, geçerli göstergelerin puan ortalamasından çıkar:
-#   ortalama >= 1.0 GÜÇLÜ AL · >= 0.3 AL · -0.3..0.3 NÖTR · <= -0.3 SAT · <= -1.0 GÜÇLÜ SAT
-rating_thresholds: [0.3, 1.0]            # [al/sat sınırı, güçlü sınırı]
+# Göstergeler bağımsız derecelendirilir; gösterge puanları arasında ortalama alınmaz.
 
 # Golden/dead cross de bir gösterge sayılır: golden yapısı +1, dead yapısı -1; kesişim yeniyse (günlük 14, haftalık 4 mum içinde) +-2.
 cross_alerts: true                       # yeni golden/dead cross olunca ayrıca anlık uyarı gönder
@@ -28,3 +43,4 @@ timeframes:
   1M:
     ma_long: 24             # fiyat / 24 aylık ortalama
     cross: [6, 18]           # aylıkta SMA 50/200 için geçmiş yetersiz
+    ichimoku: [9, 26, 52]

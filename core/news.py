@@ -1,4 +1,4 @@
-"""Kripto haber akışı: RSS topla -> kategori / coin eşleştir -> hype skoru -> rapor.
+"""Kripto haber akışı: RSS topla -> kategori / coin eşleştir -> hype skoru.
 Ek kütüphane gerektirmez (yalnızca standart kütüphane)."""
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ DEFAULT_FEEDS = {
 }
 
 # ---- sabitler -------------------------------------------------------------
-TOP_N = 5             # raporda gösterilecek kategori / coin sayısı
+TOP_N = 5             # UI'da gösterilecek kategori / coin sayısı
 MIN_MENTIONS = 2      # bir konunun listeye girmesi için son 24 saatte en az haber sayısı
 MIN_TOTAL = 15        # geçmişte bir günün "yeterli veri" sayılması için toplam haber sayısı
 MIN_BASE_DAYS = 3     # trend hesabı için gereken geçmiş gün sayısı
@@ -255,39 +255,6 @@ def update_history(hist: dict, articles, now: datetime) -> dict:
     return hist
 
 
-# ---- rapor ------------------------------------------------------------------
-def _short(t: str, n: int = 95) -> str:
-    return t if len(t) <= n else t[: n - 1].rstrip() + "…"
-
-
-def _trend_txt(r) -> str:
-    if r["trend"] is None:
-        return ""
-    arrow = "🔺" if r["trend"] >= 1.5 else ("🔻" if r["trend"] <= 0.7 else "▫️")
-    return f" · olağanın ×{r['trend']:.1f} {arrow}"
-
-
-def _lines(rows) -> list[str]:
-    out = []
-    for i, r in enumerate(rows, 1):
-        out.append(f"{i}. {r['label']} — {r['n']} haber · {len(r['sources'])} kaynak{_trend_txt(r)}")
-        out.append(f"   ↳ “{_short(r['example'].title)}” ({r['example'].source})")
-    return out or ["(bugün belirgin bir konu yok)"]
-
-
-def format_report(res: dict, now: datetime) -> str:
-    parts = [f"🔥 KRİPTO HYPE RAPORU — {now.astimezone(IST):%d.%m.%Y}", "",
-             f"Son 24 saatte {res['ok']}/{res['total']} kaynaktan {res['n24']} haber tarandı.", "",
-             "📂 ÖNE ÇIKAN KATEGORİLER"] + _lines(res["cats"]) + ["", "🪙 ÖNE ÇIKAN COİN / PROJELER"] + _lines(res["coins"]) + [""]
-    if not res["use_trend"]:
-        parts.append(f"ℹ️ Trend (olağana göre artış) için geçmiş veri birikiyor ({res['base_days']}/{MIN_BASE_DAYS} gün). Şimdilik sıralama haber ve kaynak sayısına göre.")
-    parts.append("Kategori/coin eşleştirmesi anahtar kelimeyle yapılır, yanılabilir. Başlıklar kaynaklardan alınmıştır.")
-    if res.get("failed"):
-        parts.append("Ulaşılamayan kaynaklar: " + ", ".join(res["failed"]))
-    parts += ["", "⚠️ Yatırım tavsiyesi değildir."]
-    return "\n".join(parts)
-
-
 def analyze(feeds=None, hist=None, fetch=None, now=None):
     """Haberleri çek, sınıflandır, hype hesapla. Döndürür: (makaleler, sonuç sözlüğü)."""
     now = now or datetime.now(timezone.utc)
@@ -302,8 +269,8 @@ def analyze(feeds=None, hist=None, fetch=None, now=None):
     return articles, res
 
 
-def build_news_report(feeds=None, hist=None, fetch=None, now=None):
-    """Döndürür: (Telegram mesajı, güncellenmiş geçmiş)."""
+def analyze_with_history(feeds=None, hist=None, fetch=None, now=None):
+    """Panel için haberleri analiz et ve UI trend geçmişini döndür."""
     now = now or datetime.now(timezone.utc)
     articles, res = analyze(feeds, hist, fetch, now)
-    return format_report(res, now), update_history(copy.deepcopy(hist or {}), articles, now)
+    return articles, res, update_history(copy.deepcopy(hist or {}), articles, now)

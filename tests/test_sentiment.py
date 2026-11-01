@@ -34,7 +34,7 @@ grade_of = lambda v: [r for r in latest_rows(raw, {}, "1d", dict(info, value=flo
 assert [grade_of(v) for v in (5, 10, 11, 24, 25, 50, 74, 75, 89, 90, 95)] == [2, 2, 1, 1, 0, 0, 0, -1, -1, -2, -2]
 assert sentiment.classify(24) == "Aşırı korku" and sentiment.classify(25) == "Korku" and sentiment.classify(75) == "Aşırı açgözlülük"
 assert all(r["key"] != "fear_greed" for r in latest_rows(raw, {}, "1w")), "haftalıkta F&G olmamalı"
-assert summarize(latest_rows(raw, {}, "1d", info))["n"] == 8 and summarize(latest_rows(raw, {}, "1d"))["n"] == 7
+assert summarize(latest_rows(raw, {}, "1d", info))["n"] == 9 and summarize(latest_rows(raw, {}, "1d"))["n"] == 8
 
 # 4) API çökerse: yeniden dene -> taze önbellek -> yoksa hata
 def boom(*a, **k): raise OSError("bağlantı yok")
