@@ -41,8 +41,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert all(ticker in m1[1] for ticker in ("SOL", "XRP"))
     for k in ("📅 GÜNLÜK", "📅 HAFTALIK", "📅 AYLIK", "RSI:", "Stoch RSI:", "Bollinger:",
               "MFI:", "Fiyat/SMA:", "ATH düşüşü:", "Ichimoku:", "Fear & Greed:",
-              "SMA kesişimi:", "Güçlü al", "tavsiyesi değildir"):
+              "SMA kesişimi:", "Güçlü al"):
         assert k in m1[0], f"rapor eksik: {k}"
+    assert all("Yatırım tavsiyesi değildir" not in message for message in m1)
     for heading in ("POZİTİF", "NÖTR", "OLUMSUZ", "VERİ YOK"):
         assert heading not in m1[0], f"raporda gereksiz grup başlığı var: {heading}"
     assert m1[0].count("Fear & Greed:") == 2, "Fear & Greed yalnızca coin başına günlük bölümde olmalı"
@@ -91,7 +92,7 @@ with tempfile.TemporaryDirectory() as tmp:
     ca = cs.run(cfg, sent.append, state_path=st, fetch=fetch, fetch_fg=lambda: fg)
     last_ts, last_kind = evs[-1]
     assert len(ca) == 1 and ("GOLDEN CROSS" if last_kind == 1 else "DEAD CROSS") in ca[0] and f"{last_ts:%d.%m.%Y}" in ca[0], ca
-    assert "BTC GÜNLÜK" in ca[0] and "genel derece" not in ca[0] and "tavsiyesi değildir" in ca[0] and "gecikmeli" in ca[0]
+    assert "BTC GÜNLÜK" in ca[0] and "genel derece" not in ca[0] and "Yatırım tavsiyesi değildir" not in ca[0] and "gecikmeli" in ca[0]
     assert json.loads(st.read_text(encoding="utf-8"))["cross_1d"] == last_ts.isoformat()
     assert cs.run(cfg, sent.append, state_path=st, fetch=fetch, fetch_fg=lambda: fg) == [], "aynı kesişim iki kez bildirilmemeli"
     s["cross_1d"] = evs[-2][0].isoformat(); rd(s, st)

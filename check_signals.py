@@ -31,7 +31,6 @@ ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.json"
 TF_UP = {"1d": "GÜNLÜK", "1w": "HAFTALIK", "1M": "AYLIK"}
 TF_TR = {"1d": "Günlük", "1w": "Haftalık", "1M": "Aylık"}
-DISCLAIMER = "⚠️ Yatırım tavsiyesi değildir."
 IST = timezone(timedelta(hours=3))  # Türkiye saati
 MAX_CROSS_ALERTS = 2  # uzun süre çalışmamışsa en fazla bu kadar geçmiş kesişim uyarısı gönderilir
 MAX_REPORT_CHARS = 3800  # Telegram'ın 4096 karakter sınırına güvenli pay bırak
@@ -121,8 +120,7 @@ def cross_message(tf: str, ts, kind: int, results, asset: dict | None = None) ->
         f"{asset['name']} ({asset['symbol']}) için {ts:%d.%m.%Y} mumu kapandı: hızlı ortalama (SMA{fast}), "
         f"yavaş ortalamayı (SMA{slow}) {'yukarı' if golden else 'aşağı'} kesti. Kapanış {close:,.8g} {quote}.",
         "Not: Kesişim gecikmeli bir onay sinyalidir; fiyat çoğu zaman haftalardır o yönde hareket ediyordur. "
-        "Ortalamalar sık kesiştiği için yanlış alarm da olabilir.",
-        "", DISCLAIMER])
+        "Ortalamalar sık kesiştiği için yanlış alarm da olabilir."])
 
 
 def report_messages(results_by_ticker, assets: list[dict], first_run: bool = False) -> list[str]:
@@ -134,7 +132,7 @@ def report_messages(results_by_ticker, assets: list[dict], first_run: bool = Fal
         header = f"{icon} KRİPTO TAKİP PANELİ · {datetime.now(IST):%d.%m.%Y}{part}"
         sections = ["\n".join(_indicator_summary(results_by_ticker[asset["ticker"]], asset))
                     for asset in group]
-        messages.append("\n\n".join([header, *sections, DISCLAIMER]))
+        messages.append("\n\n".join([header, *sections]))
     if any(len(message) > MAX_REPORT_CHARS for message in messages):
         raise ValueError("Gösterge raporu Telegram mesaj sınırını aşıyor.")
     return messages
