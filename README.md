@@ -28,7 +28,7 @@ kesişim yeniyse (günlük 14, haftalık 4, aylık 2 mum içinde) güçlü AL/SA
 Günlük ve haftalıkta SMA 50/200, aylıkta SMA 6/18 kullanılır.
 Yeni bir kesişim olunca raporun dışında ayrıca uyarı gelir (`cross_alerts: false` ile kapatılır).
 
-Her gösterge kendi verisinden bağımsız derece alır; göstergeler arasında puan ortalaması veya ağırlıklı genel derece yoktur.
+Her gösterge kendi verisinden bağımsız derece alır. Panelde göstergeler ayrı ayrı gösterilir ve backtest edilir. Telegram raporunda ise her zaman diliminin tüm göstergeleri tek bir **skorda** özetlenir (aşağıya bak).
 Ichimoku'da fiyat bulutun üstünde/altında/içinde oluşuna, Tenkan-Kijun ilişkisine ve bulut yönüne bakılır.
 Günlük, haftalık ve aylık göstergeler ayrı değerlendirilir. Eşikler `config.yaml` içinden değiştirilebilir; bunlar **başlangıç değerleridir**.
 
@@ -43,9 +43,28 @@ Her gösterge bağımsız olarak ve ayrı başlangıç bakiyesiyle simüle edili
 
 ## Raporda ne var?
 
-- BTC, ETH, SOL ve XRP için günlük, haftalık ve aylık: her göstergenin kendi değeri ve derecesi (güçlü al'dan güçlü sat'a gruplanmış)
+Telegram raporunda gösterge listesi yoktur; her coin için yalnızca skor çubukları gösterilir:
+
+- Coin başlığının altında **günlük kapanış fiyatı** (son kapanmış günlük mumun tarihiyle).
+- Günlük, haftalık ve aylık için ayrı **skor (-100 … +100)** ve metin çubuğu.
+- Raporun en sonunda (son mesajda) **Fear & Greed** değeri ve dün / 7 / 30 gün önceki değerleri.
+
+**Skor nasıl hesaplanır:** Zaman dilimindeki geçerli göstergelerin dereceleri (-2 … +2) eşit ağırlıkla ortalanır ve 50 ile çarpılır.
+Çoğunluk güçlü sat/sat ise skor -100'e, nötr ağırlıklıysa 0'a, al/güçlü al ağırlıklıysa +100'e yaklaşır. Verisi olmayan göstergeler hesaba katılmaz.
+Skor etiketi: ≥ +50 güçlü al · ≥ +15 al · -15 … +15 nötr · ≤ -15 sat · ≤ -50 güçlü sat.
+Günlük skora Fear & Greed de bir gösterge olarak dahildir. Dip arayan ve trend izleyen göstergeler zıt yönde olabildiği için skor sık sık 0 civarında kalabilir.
+Skor mekanik bir özettir; emir ya da yatırım tavsiyesi değildir.
+
+```
+🪙 BTC — Bitcoin
+💰 Günlük kapanış (05.11.2026): 78,002.14 USDT
+
+📅 GÜNLÜK · Skor: +22 · 🟢 Al
+-100 ░░░░░░░░░░│░░●░░░░░░░ +100
+```
+
 - Haberler ve hype özeti yalnızca panelin Haber / Hype sekmesinde gösterilir.
-- Telegram'da yalnızca coin durum raporları ve yeni golden/dead cross uyarıları gönderilir.
+- Telegram'da yalnızca bu skor raporu ve yeni golden/dead cross uyarıları gönderilir.
 
 ## Kurulum
 

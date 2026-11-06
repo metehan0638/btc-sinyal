@@ -25,7 +25,7 @@ from core.data import get_candles
 from core.notifier import get_chats, load_env, send_telegram
 from core.sentiment import fetch_fear_greed
 from core.zones import (LEVELS, MIN_BARS, RATING_TEXT, compute_metrics, cross_events, latest_rows,
-                        trend_info)
+                        summarize, trend_info)
 
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.json"
@@ -34,18 +34,8 @@ TF_TR = {"1d": "Günlük", "1w": "Haftalık", "1M": "Aylık"}
 IST = timezone(timedelta(hours=3))  # Türkiye saati
 MAX_CROSS_ALERTS = 2  # uzun süre çalışmamışsa en fazla bu kadar geçmiş kesişim uyarısı gönderilir
 MAX_REPORT_CHARS = 3800  # Telegram'ın 4096 karakter sınırına güvenli pay bırak
-REPORT_INDICATORS = (
-    ("rsi", "RSI"),
-    ("stochrsi", "Stoch RSI"),
-    ("bollinger", "Bollinger"),
-    ("mfi", "MFI"),
-    ("ma_ratio", "Fiyat/SMA"),
-    ("drawdown", "ATH düşüşü"),
-    ("ichimoku", "Ichimoku"),
-    ("fear_greed", "Fear & Greed"),
-    ("cross", "SMA kesişimi"),
-)
 SIGNAL_LABELS = {2: "Güçlü al", 1: "Al", 0: "Nötr", -1: "Sat", -2: "Güçlü sat"}
+BAR_WIDTH = 21  # skor çubuğundaki hücre sayısı (orta hücre = 0)
 
 
 def configured_assets(cfg: dict) -> list[dict]:
@@ -80,32 +70,50 @@ def analyze(df, tf: str, cfg: dict, fg_info: dict | None = None):
     return df, raw, rows, trend_info(raw, params, tf)
 
 
-def _indicator_summary(results, asset: dict) -> list[str]:
-    rows_by_tf = {tf: {row["key"]: row for row in results[tf][2]} for tf in TF_UP}
-    lines = [f"🪙 {asset['ticker']} — {asset['name']}"]
-    for tf, timeframe in TF_TR.items():
-        lines.append(f"\n📅 {timeframe.upper()}")
-        positive, neutral, negative, missing = [], [], [], []
-        for key, label in REPORT_INDICATORS:
-            if key == "fear_greed" and tf != "1d":
-                continue  # Fear & Greed yalnızca günlük raporda anlamlıdır.
-            row = rows_by_tf[tf].get(key)
-            grade = row.get("grade") if row else float("nan")
-            if pd.isna(grade):
-                missing.append((label, "— Veri yok"))
-                continue
-            grade = int(grade)
-            signal = f"{LEVELS[grade][0]} {SIGNAL_LABELS[grade]}"
-            (positive if grade > 0 else neutral if grade == 0 else negative).append((grade, label, signal))
+def score_value(rows: list[dict]) -> float:
+    """Geçerli göstergelerin dereceleri (-2..+2) ortalamasının 50 katı: -100 (hepsi güçlü sat) .. +100 (hepsi güçlü al).
+    Hiç geçerli gösterge yoksa NaN."""
+    mean = summarize(rows)["mean"]
+    return float("nan") if pd.isna(mean) else float(mean) * 50
 
-        ordered_indicators = [
-            *sorted(positive, key=lambda item: -item[0]),
-            *neutral,
-            *sorted(negative, key=lambda item: -item[0]),
-        ]
-        lines.extend(f"• {label}: {signal}" for _, label, signal in ordered_indicators)
-        lines.extend(f"• {label}: {signal}" for label, signal in missing)
+
+def score_bar(score: float, width: int = BAR_WIDTH) -> str:
+    """-100..+100 aralığında skoru gösteren metin çubuğu: ● skoru, │ sıfır noktasını gösterir."""
+    cells = ["░"] * width
+    mid = width // 2
+    cells[mid] = "│"
+    pos = round((max(-100.0, min(100.0, score)) + 100) / 200 * (width - 1))
+    cells[pos] = "●"
+    return f"-100 {''.join(cells)} +100"
+
+
+def _score_summary(results, asset: dict) -> list[str]:
+    quote = asset["symbol"].split("/")[-1]
+    close = results["1d"][1]["close"]
+    lines = [f"🪙 {asset['ticker']} — {asset['name']}",
+             f"💰 Günlük kapanış ({close.index[-1]:%d.%m.%Y}): {close.iloc[-1]:,.8g} {quote}"]
+    for tf, timeframe in TF_TR.items():
+        rows = results[tf][2]
+        score = score_value(rows)
+        lines.append("")
+        if pd.isna(score):
+            lines.append(f"📅 {timeframe.upper()} · ❔ Yetersiz veri")
+            continue
+        level = summarize(rows)["level"]
+        value = int(round(score))
+        shown = f"{value:+d}" if value else "0"
+        lines.append(f"📅 {timeframe.upper()} · Skor: {shown} · {LEVELS[level][0]} {SIGNAL_LABELS[level]}")
+        lines.append(score_bar(score))
     return lines
+
+
+def fear_greed_line(fg_info: dict | None) -> str:
+    if not fg_info:
+        return "😶 Fear & Greed: — Veri yok"
+    hist = " · ".join(f"{n} {fg_info[k]:.0f}" for n, k in (("dün", "yesterday"), ("7g", "week"), ("30g", "month"))
+                      if fg_info.get(k) is not None)
+    emoji = sentiment.EMOJI.get(fg_info["label"], "")
+    return f"{emoji} Fear & Greed: {fg_info['value']:.0f} — {fg_info['label']}" + (f" ({hist})" if hist else "")
 
 
 def cross_message(tf: str, ts, kind: int, results, asset: dict | None = None) -> str:
@@ -123,15 +131,18 @@ def cross_message(tf: str, ts, kind: int, results, asset: dict | None = None) ->
         "Ortalamalar sık kesiştiği için yanlış alarm da olabilir."])
 
 
-def report_messages(results_by_ticker, assets: list[dict], first_run: bool = False) -> list[str]:
+def report_messages(results_by_ticker, assets: list[dict], first_run: bool = False,
+                    fg_info: dict | None = None) -> list[str]:
     icon = "🆕" if first_run else "📊"
     groups = [assets[i:i + 2] for i in range(0, len(assets), 2)]
     messages = []
     for index, group in enumerate(groups, start=1):
         part = f" ({index}/{len(groups)})" if len(groups) > 1 else ""
         header = f"{icon} KRİPTO TAKİP PANELİ · {datetime.now(IST):%d.%m.%Y}{part}"
-        sections = ["\n".join(_indicator_summary(results_by_ticker[asset["ticker"]], asset))
+        sections = ["\n".join(_score_summary(results_by_ticker[asset["ticker"]], asset))
                     for asset in group]
+        if index == len(groups):  # Fear & Greed raporun en sonunda, yalnızca son mesajda
+            sections.append(fear_greed_line(fg_info))
         messages.append("\n\n".join([header, *sections]))
     if any(len(message) > MAX_REPORT_CHARS for message in messages):
         raise ValueError("Gösterge raporu Telegram mesaj sınırını aşıyor.")
@@ -165,7 +176,7 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
 
     state = load_state(state_path)
     if status_only:
-        msgs = report_messages(results_by_ticker, assets)
+        msgs = report_messages(results_by_ticker, assets, fg_info=fg_info)
         for m in msgs:
             send(m)
         return msgs
@@ -189,7 +200,7 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
     today = f"{datetime.now(IST):%Y-%m-%d}"
     first_run = not state.get("last_report")
     if first_run or (cfg.get("daily_report", True) and state.get("last_report") != today):
-        messages += report_messages(results_by_ticker, assets, first_run=first_run)
+        messages += report_messages(results_by_ticker, assets, first_run=first_run, fg_info=fg_info)
         new_state["last_report"] = today  # günde en fazla bir rapor
         for asset in assets:
             for tf in TF_UP:
