@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory() as tmp:
                for ticker in ("BTC", "ETH", "SOL", "XRP"))
     assert all(ticker in m1[0] for ticker in ("BTC", "ETH"))
     assert all(ticker in m1[1] for ticker in ("SOL", "XRP"))
-    for k in ("📅 GÜNLÜK", "📅 HAFTALIK", "📅 AYLIK", "Skor:", "Günlük kapanış", "USDT", "-100", "+100", "●"):
+    for k in ("📅 GÜNLÜK", "📅 HAFTALIK", "📅 AYLIK", "📈 Trend:", "🌡️ Aşırılık:", "Günlük kapanış", "USDT", "-100", "+100", "●"):
         assert k in m1[0], f"rapor eksik: {k}"
     assert all("Yatırım tavsiyesi değildir" not in message for message in m1)
     for heading in ("POZİTİF", "NÖTR", "OLUMSUZ", "VERİ YOK"):
@@ -47,7 +47,8 @@ with tempfile.TemporaryDirectory() as tmp:
     # gösterge listesi artık raporda yok; yalnızca skor çubuğu var
     for gone in ("• ", "RSI", "Stoch RSI", "Bollinger", "MFI", "Fiyat/SMA", "ATH düşüşü", "Ichimoku", "SMA kesişimi"):
         assert not any(gone in message for message in m1), f"gösterge listesi kalmış: {gone}"
-    assert all(m.count("Skor:") == 6 for m in m1), "her coin için günlük/haftalık/aylık skor olmalı"
+    assert all(m.count("📈 Trend:") == 6 and m.count("🌡️ Aşırılık:") == 6 for m in m1), \
+        "her coin için günlük/haftalık/aylık Trend ve Aşırılık skoru olmalı"
     assert all(m.count("Günlük kapanış") == 2 for m in m1), "her coin için günlük kapanış fiyatı olmalı"
     assert sum(m.count("Fear & Greed") for m in m1) == 1 and "Fear & Greed: 15 — Aşırı korku" in m1[-1], \
         "Fear & Greed yalnızca raporun sonunda (son mesaj) olmalı"
@@ -56,11 +57,12 @@ with tempfile.TemporaryDirectory() as tmp:
     for m in m1:
         for section in m.split("🪙 ")[1:]:
             lines = section.splitlines()
-            assert lines[1].startswith("💰 Günlük kapanış") and section.index("Günlük kapanış") < section.index("Skor:")
-    scores = [int(x) for m in m1 for x in re.findall(r"Skor: ([+-]?\d+)", m)]
-    assert len(scores) == 12 and all(-100 <= v <= 100 for v in scores), scores
-    for bar in re.findall(r"-100 (\S+) \+100", m1[0]):
-        assert len(bar) == cs.BAR_WIDTH and bar.count("●") == 1
+            assert lines[1].startswith("💰 Günlük kapanış") and section.index("Günlük kapanış") < section.index("Trend:")
+    scores = [int(x) for m in m1 for x in re.findall(r"(?:Trend|Aşırılık): ([+-]?\d+)", m)]
+    assert len(scores) == 24 and all(-100 <= v <= 100 for v in scores), scores
+    bars = [bar for m in m1 for bar in re.findall(r"^-100 (\S+) \+100$", m, re.M)]
+    assert len(bars) == 24 and all(len(b) == cs.BAR_WIDTH and b.count("●") == 1 for b in bars)
+    assert cs.LEGEND in m1[-1] and all(cs.LEGEND not in m for m in m1[:-1]), "açıklama satırı yalnızca son mesajda olmalı"
     s = json.loads(st.read_text(encoding="utf-8"))
     assert s["last_report"] and not any(k.startswith("rating_") for k in s)
     assert "last_news" not in s
@@ -103,7 +105,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # 5) Fear & Greed çökerse rapor yine gider (o satır olmadan)
     def fg_down(): raise RuntimeError("Fear & Greed endeksi alınamadı: test")
     m5 = cs.run(cfg, sent.append, state_path=Path(tmp) / "s5.json", fetch=fetch, fetch_fg=fg_down)
-    assert m5 and "Fear & Greed: — Veri yok" in m5[-1] and "Skor:" in m5[0]
+    assert m5 and "Fear & Greed: — Veri yok" in m5[-1] and "📈 Trend:" in m5[0]
     # 6) kısa geçmiş (yedek borsa) -> yanlış rapor yerine hata
     try: cs.run(cfg, sent.append, state_path=Path(tmp) / "s6.json", fetch=lambda *a: df.iloc[:200], fetch_fg=lambda: fg); assert False
     except RuntimeError as e: assert "en az" in str(e)
@@ -124,4 +126,16 @@ assert np.isnan(cs.score_value(mk(float("nan"))))
 bars = {v: cs.score_bar(v) for v in (-100, 0, 100)}
 assert bars[-100].split()[1][0] == "●" and bars[100].split()[1][-1] == "●" and bars[0].split()[1][cs.BAR_WIDTH // 2] == "●"
 assert cs.score_bar(250).split()[1][-1] == "●", "sınır dışı değer kenara sıkıştırılmalı"
+# 9) trend / aşırılık ayrımı
+from core.zones import ma_trend_grade, split_rows
+def mkraw(ratio): return pd.DataFrame({"ma_ratio": [1.0, ratio]})
+assert ma_trend_grade(mkraw(1.4)) == 1 and ma_trend_grade(mkraw(0.7)) == -1 and ma_trend_grade(mkraw(1.0)) == 0
+assert np.isnan(ma_trend_grade(mkraw(float("nan"))))
+rows = [dict(key=k, grade=g) for k, g in (("rsi", -2), ("mfi", -2), ("ma_ratio", -1), ("drawdown", -2), ("fear_greed", -1),
+                                          ("ichimoku", 2), ("cross", 1))]
+grp = split_rows(rows, mkraw(1.8))
+assert [r["key"] for r in grp["trend"]] == ["ichimoku", "cross", "ma_trend"]
+assert [r["key"] for r in grp["stretch"]] == ["rsi", "mfi", "ma_ratio", "drawdown", "fear_greed"]
+# güçlü yükselişte: trend çubuğu çok yüksek, aşırılık çubuğu çok düşük — tek ortalamada 0'a düşmemeli
+assert cs.score_value(grp["trend"]) > 50 and cs.score_value(grp["stretch"]) < -50
 print("Tüm bildirim testleri geçti ✔")

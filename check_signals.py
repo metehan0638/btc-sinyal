@@ -25,7 +25,7 @@ from core.data import get_candles
 from core.notifier import get_chats, load_env, send_telegram
 from core.sentiment import fetch_fear_greed
 from core.zones import (LEVELS, MIN_BARS, RATING_TEXT, compute_metrics, cross_events, latest_rows,
-                        summarize, trend_info)
+                        split_rows, summarize, trend_info)
 
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.json"
@@ -35,6 +35,10 @@ IST = timezone(timedelta(hours=3))  # Türkiye saati
 MAX_CROSS_ALERTS = 2  # uzun süre çalışmamışsa en fazla bu kadar geçmiş kesişim uyarısı gönderilir
 MAX_REPORT_CHARS = 3800  # Telegram'ın 4096 karakter sınırına güvenli pay bırak
 SIGNAL_LABELS = {2: "Güçlü al", 1: "Al", 0: "Nötr", -1: "Sat", -2: "Güçlü sat"}
+TREND_LABELS = {2: "Güçlü yükseliş", 1: "Yükseliş", 0: "Yatay", -1: "Düşüş", -2: "Güçlü düşüş"}
+STRETCH_LABELS = {2: "Dip bölgesi", 1: "Ucuz", 0: "Dengeli", -1: "Isınmış", -2: "Aşırı ısınmış"}
+LEGEND = ("ℹ️ Trend çubuğu: -100 güçlü düşüş, +100 güçlü yükseliş · "
+          "Aşırılık çubuğu: -100 aşırı ısınmış (pahalı), +100 dip bölgesi (ucuz)")
 BAR_WIDTH = 21  # skor çubuğundaki hücre sayısı (orta hücre = 0)
 
 
@@ -87,23 +91,26 @@ def score_bar(score: float, width: int = BAR_WIDTH) -> str:
     return f"-100 {''.join(cells)} +100"
 
 
+def _score_lines(title: str, rows: list[dict], labels: dict) -> list[str]:
+    score = score_value(rows)
+    if pd.isna(score):
+        return [f"{title}: ❔ Yetersiz veri"]
+    level = summarize(rows)["level"]
+    value = int(round(score))
+    shown = f"{value:+d}" if value else "0"
+    return [f"{title}: {shown} · {LEVELS[level][0]} {labels[level]}", score_bar(score)]
+
+
 def _score_summary(results, asset: dict) -> list[str]:
     quote = asset["symbol"].split("/")[-1]
     close = results["1d"][1]["close"]
     lines = [f"🪙 {asset['ticker']} — {asset['name']}",
              f"💰 Günlük kapanış ({close.index[-1]:%d.%m.%Y}): {close.iloc[-1]:,.8g} {quote}"]
     for tf, timeframe in TF_TR.items():
-        rows = results[tf][2]
-        score = score_value(rows)
-        lines.append("")
-        if pd.isna(score):
-            lines.append(f"📅 {timeframe.upper()} · ❔ Yetersiz veri")
-            continue
-        level = summarize(rows)["level"]
-        value = int(round(score))
-        shown = f"{value:+d}" if value else "0"
-        lines.append(f"📅 {timeframe.upper()} · Skor: {shown} · {LEVELS[level][0]} {SIGNAL_LABELS[level]}")
-        lines.append(score_bar(score))
+        groups = split_rows(results[tf][2], results[tf][1])
+        lines += ["", f"📅 {timeframe.upper()}",
+                  *_score_lines("📈 Trend", groups["trend"], TREND_LABELS),
+                  *_score_lines("🌡️ Aşırılık", groups["stretch"], STRETCH_LABELS)]
     return lines
 
 
@@ -142,7 +149,7 @@ def report_messages(results_by_ticker, assets: list[dict], first_run: bool = Fal
         sections = ["\n".join(_score_summary(results_by_ticker[asset["ticker"]], asset))
                     for asset in group]
         if index == len(groups):  # Fear & Greed raporun en sonunda, yalnızca son mesajda
-            sections.append(fear_greed_line(fg_info))
+            sections += [LEGEND, fear_greed_line(fg_info)]
         messages.append("\n\n".join([header, *sections]))
     if any(len(message) > MAX_REPORT_CHARS for message in messages):
         raise ValueError("Gösterge raporu Telegram mesaj sınırını aşıyor.")

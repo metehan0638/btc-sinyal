@@ -214,6 +214,28 @@ def latest_rows(raw: pd.DataFrame, params: dict | None, tf: str, fg_info: dict |
     return rows
 
 
+# ---------- iki ayrı skor: TREND ve AŞIRILIK ----------
+# Trend göstergeleri "yön" ölçer (yükselişte +), aşırılık göstergeleri "ucuz/pahalı" ölçer (dipte +, şişmişte -).
+# İkisi birbirine zıt çıkabildiği için tek ortalamada birleştirilmez; Telegram raporunda ayrı ayrı gösterilir.
+TREND_KEYS = ("ichimoku", "cross")  # + fiyatın uzun ortalamaya göre yönü (ma_trend)
+
+
+def ma_trend_grade(raw: pd.DataFrame) -> float:
+    """Fiyat uzun ortalamanın üstündeyse +1 (yükseliş yönü), altındaysa -1, eşitse 0; veri yoksa NaN."""
+    ratio = raw["ma_ratio"].iloc[-1]
+    return np.nan if pd.isna(ratio) else float(np.sign(ratio - 1))
+
+
+def split_rows(rows: list[dict], raw: pd.DataFrame) -> dict[str, list[dict]]:
+    """Gösterge satırlarını iki gruba ayırır.
+    trend: Ichimoku + golden/dead cross + fiyatın uzun ortalamaya göre yönü (ma_trend)
+    stretch (aşırılık): RSI, StochRSI, Bollinger, MFI, fiyat/uzun ortalama oranı, ATH'den uzaklık, (günlükte) Fear & Greed"""
+    trend = [r for r in rows if r["key"] in TREND_KEYS]
+    trend.append(dict(key="ma_trend", name="Fiyat / uzun ortalama yönü", grade=ma_trend_grade(raw)))
+    stretch = [r for r in rows if r["key"] not in TREND_KEYS]
+    return dict(trend=trend, stretch=stretch)
+
+
 def summarize(rows: list[dict], thresholds=(0.3, 1.0)) -> dict:
     """Geçerli göstergelerin puan ortalaması (-2..+2) -> genel derece.
     thresholds = (AL/SAT sınırı, GÜÇLÜ sınırı): ortalama >= 1.0 güçlü al, >= 0.3 al, -0.3..0.3 nötr, <= -0.3 sat, <= -1.0 güçlü sat."""
