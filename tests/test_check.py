@@ -135,7 +135,7 @@ rows = [dict(key=k, grade=g) for k, g in (("rsi", -2), ("mfi", -2), ("ma_ratio",
                                           ("ichimoku", 2), ("cross", 1))]
 grp = split_rows(rows, mkraw(1.8))
 assert [r["key"] for r in grp["trend"]] == ["ichimoku", "cross", "ma_trend"]
-assert [r["key"] for r in grp["stretch"]] == ["rsi", "mfi", "ma_ratio", "drawdown", "fear_greed"]
+assert [r["key"] for r in grp["stretch"]] == ["oscillators", "ma_ratio", "drawdown", "fear_greed"]
 # güçlü yükselişte: trend çubuğu çok yüksek, aşırılık çubuğu çok düşük — tek ortalamada 0'a düşmemeli
 assert cs.score_value(grp["trend"]) > 50 and cs.score_value(grp["stretch"]) < -50
 print("Tüm bildirim testleri geçti ✔")

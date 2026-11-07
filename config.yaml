@@ -22,7 +22,8 @@ assets:
 
 # Her gösterge değerine göre -2..+2 puan alır (güçlü sat -2, sat -1, nötr 0, al +1, güçlü al +2).
 # Telegram raporunda göstergeler iki gruba ayrılıp her grubun puan ortalaması (x50 = -100..+100) ayrı skor olarak gösterilir:
-#   Trend: Ichimoku, golden/dead cross, fiyatın uzun ortalamaya göre yönü · Aşırılık: RSI, StochRSI, Bollinger, MFI, fiyat/ortalama oranı, ATH'den uzaklık, Fear & Greed (günlükte)
+#   Trend: Ichimoku, golden/dead cross, fiyatın uzun ortalamaya göre yönü
+#   Aşırılık: momentum osilatörleri (RSI+StochRSI+Bollinger+MFI ortalaması = TEK oy), fiyat/ortalama oranı, ATH'den uzaklık, Fear & Greed (günlükte)
 
 # Golden/dead cross de bir gösterge sayılır: golden yapısı +1, dead yapısı -1; kesişim yeniyse (günlük 14, haftalık 4 mum içinde) +-2.
 cross_alerts: true                       # yeni golden/dead cross olunca ayrıca anlık uyarı gönder

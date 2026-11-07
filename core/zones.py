@@ -218,6 +218,9 @@ def latest_rows(raw: pd.DataFrame, params: dict | None, tf: str, fg_info: dict |
 # Trend göstergeleri "yön" ölçer (yükselişte +), aşırılık göstergeleri "ucuz/pahalı" ölçer (dipte +, şişmişte -).
 # İkisi birbirine zıt çıkabildiği için tek ortalamada birleştirilmez; Telegram raporunda ayrı ayrı gösterilir.
 TREND_KEYS = ("ichimoku", "cross")  # + fiyatın uzun ortalamaya göre yönü (ma_trend)
+# RSI, StochRSI, Bollinger %B ve MFI aynı bilgiyi (kısa vadeli momentum aşırılığı) ölçer. Dördü ayrı oy olsaydı
+# Aşırılık skorunun yarısından fazlasını tek bir bilgi belirlerdi; bu yüzden önce kendi içinde ortalanıp TEK oy olur.
+OSCILLATOR_KEYS = ("rsi", "stochrsi", "bollinger", "mfi")
 
 
 def ma_trend_grade(raw: pd.DataFrame) -> float:
@@ -227,12 +230,16 @@ def ma_trend_grade(raw: pd.DataFrame) -> float:
 
 
 def split_rows(rows: list[dict], raw: pd.DataFrame) -> dict[str, list[dict]]:
-    """Gösterge satırlarını iki gruba ayırır.
+    """Gösterge satırlarını iki gruba ayırır; her satır grubun bir OYUDUR.
     trend: Ichimoku + golden/dead cross + fiyatın uzun ortalamaya göre yönü (ma_trend)
-    stretch (aşırılık): RSI, StochRSI, Bollinger, MFI, fiyat/uzun ortalama oranı, ATH'den uzaklık, (günlükte) Fear & Greed"""
+    stretch (aşırılık): momentum osilatörleri (RSI, StochRSI, Bollinger, MFI tek oy) + fiyat/uzun ortalama oranı
+                        + ATH'den uzaklık + (günlükte) Fear & Greed"""
     trend = [r for r in rows if r["key"] in TREND_KEYS]
     trend.append(dict(key="ma_trend", name="Fiyat / uzun ortalama yönü", grade=ma_trend_grade(raw)))
-    stretch = [r for r in rows if r["key"] not in TREND_KEYS]
+    oscillators = [r["grade"] for r in rows if r["key"] in OSCILLATOR_KEYS and not pd.isna(r["grade"])]
+    stretch = [dict(key="oscillators", name="Momentum osilatörleri (RSI, StochRSI, Bollinger, MFI)",
+                    grade=sum(oscillators) / len(oscillators) if oscillators else np.nan)]
+    stretch += [r for r in rows if r["key"] not in TREND_KEYS and r["key"] not in OSCILLATOR_KEYS]
     return dict(trend=trend, stretch=stretch)
 
 

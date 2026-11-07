@@ -37,6 +37,20 @@ Günlük, haftalık ve aylık göstergeler ayrı değerlendirilir. Eşikler `con
 
 Panelde coin seçilebilir; her coin kendi mum geçmişi, fiyatı, dereceleri ve backtest'iyle ayrı hesaplanır. BTC'nin Fear & Greed verisi genel piyasa göstergesi olarak seçili coin'in günlük derecesine eklenir.
 
+## Skor geçmişi paneli (🎯 sekmesi)
+
+Panelin **Skor geçmişi** sekmesi Trend ve Aşırılık skorlarını geçmişteki her mum için hesaplar (raporla aynı kurallar,
+yalnızca o muma kadarki veri) ve şunları gösterir:
+
+- Fiyatın altında iki skorun zaman çizgisi (±15 ve ±50 etiket sınırlarıyla).
+- Her skor bölgesi için ("güçlü düşüş" … "güçlü yükseliş", "aşırı ısınmış" … "dip bölgesi") sonraki 30/90/180 gün
+  (haftalıkta 4/13/26 hafta, aylıkta 1/3/6 ay) getirisinin ortalaması, medyanı ve pozitif olma oranı; tüm mumlar kıyas satırıdır.
+- Trend × Aşırılık 3×3 tablosu: ortalama ileri getiri ve her hücredeki mum sayısı.
+
+Bu tablolar tahmin değil, geçmişin tarifidir: bitişik mumların ileri getiri pencereleri üst üste biner, bu yüzden güvenilirliği
+**"Ayrı dönem"** sütunu (skorun bölgeye ayrı giriş sayısı) belirler. Getiriler kapanıştan kapanışa ve komisyonsuzdur.
+Mantık `core/scores.py` içindedir.
+
 ## Geçmiş performans paneli
 
 Her gösterge bağımsız olarak ve ayrı başlangıç bakiyesiyle simüle edilir: derece 0 veya altından AL tarafına geçtiğinde sonraki mumun açılışında alır; hedef fiyata ulaşınca satar. Kâr hedefi ve işlem yönü başına komisyon panelden değiştirilebilir. Zarar kes yoktur; dönem sonunda açık işlem son kapanıştan kapatılır. Spread ve fiyat kayması hesaba katılmaz. Seçili coin'in al-tut performansı kıyas olarak kullanılır. Yeterli geçmişi olmayan gösterge tabloda ayrıca işaretlenir.
@@ -55,9 +69,10 @@ yukarı, aşırılık göstergeleri aşağı yönlü olur; tek ortalamada birle�
 | Skor | Göstergeler | +100 | -100 |
 |---|---|---|---|
 | 📈 **Trend** | Ichimoku, golden/dead cross, fiyatın uzun ortalamaya göre yönü (üstünde +1, altında -1) | güçlü yükseliş | güçlü düşüş |
-| 🌡️ **Aşırılık** | RSI, Stochastic RSI, Bollinger %B, MFI, fiyat/uzun ortalama oranı, ATH'den uzaklık, Fear & Greed (yalnızca günlük) | dip bölgesi (ucuz) | aşırı ısınmış (pahalı) |
+| 🌡️ **Aşırılık** | Momentum osilatörleri (RSI, Stochastic RSI, Bollinger %B, MFI: önce kendi içinde ortalanıp **tek oy**), fiyat/uzun ortalama oranı, ATH'den uzaklık, Fear & Greed (yalnızca günlük) | dip bölgesi (ucuz) | aşırı ısınmış (pahalı) |
 
-**Hesap:** Gruptaki geçerli göstergelerin dereceleri (-2 … +2) eşit ağırlıkla ortalanır, 50 ile çarpılır. Verisi olmayan gösterge hesaba katılmaz.
+**Hesap:** Gruptaki geçerli oyların dereceleri (-2 … +2) eşit ağırlıkla ortalanır, 50 ile çarpılır. Verisi olmayan oy hesaba katılmaz.
+RSI, StochRSI, Bollinger ve MFI hepsi kısa vadeli momentum aşırılığını ölçtüğü için dördü ayrı oy sayılmaz: önce ortalanıp tek oy olur. Böylece Aşırılık skorunun çoğunu tek bir bilgi (kısa vadeli momentum) belirlemez; oylar osilatörler, fiyat/ortalama oranı, ATH'den uzaklık ve (günlükte) Fear & Greed olur.
 Etiket sınırları: ≥ +50 güçlü · ≥ +15 orta · -15 … +15 nötr (trendde "yatay", aşırılıkta "dengeli") · ≤ -15 · ≤ -50 güçlü zıt yön.
 Bir okuma örneği: *Trend +80, Aşırılık -60* = güçlü yükseliş sürüyor ama fiyat ısınmış.
 Skorlar mekanik bir özettir; emir ya da yatırım tavsiyesi değildir.
@@ -107,6 +122,7 @@ python tests/test_core.py
 python tests/test_charting.py
 python tests/test_backtest.py
 python tests/test_check.py
+python tests/test_scores.py
 python tests/test_news.py
 python tests/test_sentiment.py
 ```
@@ -118,6 +134,7 @@ Hiçbiri internet veya Telegram gerektirmez.
 - `core/zones.py`: göstergeler, derece aralıkları, golden/dead cross
 - `core/data.py`: borsa verisi (kapanmamış mumlar atılır)
 - `core/backtest.py`: bağımsız gösterge backtestleri ve coin al-tut kıyası
+- `core/scores.py`: Trend/Aşırılık skorunun tarihsel serisi ve ileri getiri tabloları
 - `core/sentiment.py`: Fear & Greed endeksi
 - `core/news.py`: RSS haberlerini UI'da sınıflandırma ve hype analizi
 - `core/notifier.py`: Telegram

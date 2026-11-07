@@ -13,9 +13,11 @@ from plotly.subplots import make_subplots
 from core.data import get_candles
 from core.charting import indicator_series
 from core.backtest import run_backtests
+from core.scores import (HORIZONS, STRETCH_NAMES, TREND_NAMES, bucket_table, levels, matrix_table,
+                         score_history)
 from core.news import IST, analyze_with_history as analyze_news
 from core.sentiment import EMOJI as FG_EMOJI, fetch_fear_greed, summary as fg_summary
-from core.zones import (FRESH_BARS, LEVELS, LEVEL_TITLE, METRIC_KEYS, MIN_BARS, RATING_TEXT, bands_for, compute_metrics, latest_rows,
+from core.zones import (FRESH_BARS, LEVELS, LEVEL_TITLE, METRIC_KEYS, MIN_BARS, RATING_TEXT, BAR_NAME, bands_for, compute_metrics, latest_rows,
                         trend_info)
 
 CFG = yaml.safe_load(open(Path(__file__).parent / "config.yaml", encoding="utf-8"))
@@ -81,6 +83,11 @@ def load_backtests(df, raw, tf, params, fear_greed, keys, start, target_pct, fee
     return run_backtests(df, raw, tf, params, fear_greed, keys, start, target_pct, fee_pct, ticker)
 
 
+@st.cache_data(ttl=3600, show_spinner="Skor geçmişi hesaplanıyor...")
+def load_score_history(raw, tf, params, fear_greed):
+    return score_history(raw, tf, params, fear_greed)
+
+
 fg_series, fg_info = None, None
 if CFG.get("fear_greed", True):
     try:
@@ -138,7 +145,8 @@ for tf_, (df_, *_rest) in data.items():
 # ---------------- zaman dilimi seçimi ----------------
 tf = st.radio("Zaman dilimi", list(TF_LABEL), format_func=TF_LABEL.get, horizontal=True)
 df, raw, rows, params, trend = data[tf]
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Güncel durum", "📈 Grafik", "🔥 Haber / Hype", "📉 Geçmiş performans"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Güncel durum", "📈 Grafik", "🔥 Haber / Hype", "📉 Geçmiş performans",
+                                         "🎯 Skor geçmişi"])
 
 # ---------------- sekme 1: güncel durum ----------------
 with tab1:
@@ -361,3 +369,73 @@ with tab4:
                              })
             else:
                 st.caption("Bu aralıkta yeni AL geçişi oluşmadığı için işlem açılmadı.")
+
+
+# ---------------- sekme 5: Trend / Aşırılık skorunun geçmişi ----------------
+with tab5:
+    st.subheader(f"{TF_LABEL[tf]}: Trend ve Aşırılık skorunun geçmişi")
+    st.caption("Skorlar Telegram raporuyla aynı kurallarla (aynı oylar, eşit ağırlık) her mum için hesaplanır; bir mumun skoru "
+               "yalnızca o muma kadar olan veriyi kullanır. Aşağıdaki tablolar \"skor bu bölgedeyken sonraki N mumda ne oldu\" "
+               "sorusunu yanıtlar. Gelecek için garanti değildir.")
+    history = load_score_history(raw, tf, params, fg_series if tf == "1d" else None)
+    unit = BAR_NAME[tf]
+
+    last = history.iloc[-1]
+    last_levels = {column: levels(history[column]).iloc[-1] for column in ("trend", "stretch")}
+    now_cols = st.columns(2)
+    now_cols[0].metric("Trend (son kapanmış mum)", f"{last['trend']:+.0f}" if pd.notna(last["trend"]) else "-",
+                       TREND_NAMES[int(last_levels["trend"])] if pd.notna(last_levels["trend"]) else None, delta_color="off")
+    now_cols[1].metric("Aşırılık (son kapanmış mum)", f"{last['stretch']:+.0f}" if pd.notna(last["stretch"]) else "-",
+                       STRETCH_NAMES[int(last_levels["stretch"])] if pd.notna(last_levels["stretch"]) else None, delta_color="off")
+
+    controls = st.columns(3)
+    horizon = controls[0].selectbox("İleri bakış", HORIZONS[tf], index=1, format_func=lambda h: f"{h} {unit}", key="sc_horizon")
+    span = controls[1].selectbox("Grafik aralığı", ["Tümü", "Son 4 yıl", "Son 2 yıl", "Son 1 yıl"], index=1, key="sc_span")
+    log_y = controls[2].checkbox("Logaritmik fiyat ekseni", value=True, key="sc_log")
+    cut = {"Tümü": None, "Son 4 yıl": 4, "Son 2 yıl": 2, "Son 1 yıl": 1}[span]
+    begin = df.index[-1] - pd.DateOffset(years=cut) if cut else df.index[0]
+    shown = history.loc[begin:]
+
+    fig_sc = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.04)
+    fig_sc.add_trace(go.Scatter(x=shown.index, y=df["close"].loc[shown.index], name=asset["symbol"], line=dict(width=1.5)), 1, 1)
+    fig_sc.add_trace(go.Scatter(x=shown.index, y=shown["trend"], name="Trend", line=dict(width=1.3)), 2, 1)
+    fig_sc.add_trace(go.Scatter(x=shown.index, y=shown["stretch"], name="Aşırılık", line=dict(width=1.3)), 3, 1)
+    for row in (2, 3):
+        for y, color in ((50, "#1b5e20"), (15, "#66bb6a"), (-15, "#ef5350"), (-50, "#b71c1c")):
+            fig_sc.add_hline(y=y, line_dash="dot", line_color=color, row=row, col=1)
+    fig_sc.update_layout(height=640, margin=dict(l=10, r=10, t=25, b=10), legend=dict(orientation="h"), hovermode="x unified")
+    fig_sc.update_yaxes(title_text="Fiyat", row=1, col=1, type="log" if log_y else "linear")
+    fig_sc.update_yaxes(title_text="Trend", row=2, col=1, range=[-105, 105])
+    fig_sc.update_yaxes(title_text="Aşırılık", row=3, col=1, range=[-105, 105])
+    st.plotly_chart(fig_sc, width="stretch", alt=f"{asset['ticker']} fiyatı, Trend skoru ve Aşırılık skoru geçmişi")
+    st.caption("Skor grafiklerinde noktalı çizgiler ±15 ve ±50 etiket sınırlarıdır. Trend: +100 güçlü yükseliş, -100 güçlü düşüş. "
+               "Aşırılık: +100 dip bölgesi (ucuz), -100 aşırı ısınmış (pahalı).")
+
+    def bucket_view(table, names):
+        view = pd.DataFrame({"Bölge": [names.get(i, "Tüm mumlar (kıyas)") for i in table.index],
+                             "Mum": table["n"], "Zamanın payı": table["share"], "Ayrı dönem": table["episodes"],
+                             f"Ort. getiri ({horizon} {unit})": table["mean"], "Medyan": table["median"],
+                             "Getirisi pozitif": table["pos_rate"]})
+        return view.reset_index(drop=True)
+
+    percent_cfg = {name: st.column_config.NumberColumn(format="percent")
+                   for name in ("Zamanın payı", f"Ort. getiri ({horizon} {unit})", "Medyan", "Getirisi pozitif")}
+    st.markdown(f"##### Skor bölgesine göre sonraki {horizon} {unit}lık getiri")
+    for title, column, names in (("📈 Trend", "trend", TREND_NAMES), ("🌡️ Aşırılık", "stretch", STRETCH_NAMES)):
+        st.markdown(f"**{title}**")
+        st.dataframe(bucket_view(bucket_table(df["close"], history[column], horizon), names), hide_index=True, width="stretch",
+                     column_config=percent_cfg, alt=f"{title} skor bölgelerine göre ileri getiri istatistikleri")
+
+    mean_table, count_table = matrix_table(df["close"], history["trend"], history["stretch"], horizon)
+    st.markdown(f"##### Trend × Aşırılık: ortalama sonraki {horizon} {unit}lık getiri")
+    matrix_cols = st.columns(2)
+    matrix_cols[0].dataframe(mean_table, width="stretch", alt="Trend ve Aşırılık bölgelerine göre ortalama ileri getiri",
+                             column_config={c: st.column_config.NumberColumn(format="percent") for c in mean_table.columns})
+    matrix_cols[1].dataframe(count_table, width="stretch", alt="Her Trend ve Aşırılık hücresindeki mum sayısı")
+    st.caption("Sol tablo ortalama getiri, sağ tablo her hücredeki mum sayısıdır. Az mumlu hücrelere güvenme.")
+
+    st.info("Dikkat: (1) Bitişik mumların ileri getiri pencereleri birbirinin neredeyse aynısıdır; güvenilirliği 'Mum' değil "
+            "**'Ayrı dönem'** sütunu belirler. (2) Kripto geçmişi yalnızca birkaç boğa/ayı döngüsünden oluşur; bir bölgenin "
+            "sonuçları çoğu zaman bir iki döngüye aittir. (3) Getiriler kapanıştan kapanışa, komisyonsuzdur ve al-tut "
+            "getirisiyle (kıyas satırı) karşılaştırılmalıdır. (4) Geçmişte işleyen bir bölge gelecekte de işleyecek demek değildir. "
+            "(5) İstatistikler her zaman seçili zaman diliminin tüm geçmişinden hesaplanır; grafik aralığı yalnızca görünümü değiştirir.")
