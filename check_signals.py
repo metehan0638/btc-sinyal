@@ -1,5 +1,6 @@
-"""Kripto varlıklar için gösterge derecelendirme raporunu ve golden/dead cross uyarılarını Telegram'a gönderir.
-Dereceler göstergelerin değerlerine bakan mekanik etiketlerdir; emir ya da tavsiye değildir.
+"""Kripto varlıklar için Dip Skoru raporunu Telegram'a gönderir.
+Dip Skoru, göstergelerin etiketlerinden (Güçlü Dip ... Aşırı Şişmiş) hesaplanan mekanik bir özettir; emir ya da tavsiye
+değildir ve gerçek dip veya tepe garantisi vermez.
 
 Kullanım:
   python check_signals.py                # günlük rapor (Görev Zamanlayıcı / GitHub Actions bunu çalıştırır)
@@ -24,21 +25,16 @@ from core import sentiment
 from core.data import get_candles
 from core.notifier import get_chats, load_env, send_telegram
 from core.sentiment import fetch_fear_greed
-from core.zones import (LEVELS, MIN_BARS, RATING_TEXT, compute_metrics, cross_events, latest_rows,
-                        split_rows, summarize, trend_info)
+from core.indicators import ICONS, MIN_BARS, build_indicators
+from core.scoring import evaluate
 
 ROOT = Path(__file__).resolve().parent
 STATE_FILE = ROOT / "state.json"
 TF_UP = {"1d": "GÜNLÜK", "1w": "HAFTALIK", "1M": "AYLIK"}
 TF_TR = {"1d": "Günlük", "1w": "Haftalık", "1M": "Aylık"}
 IST = timezone(timedelta(hours=3))  # Türkiye saati
-MAX_CROSS_ALERTS = 2  # uzun süre çalışmamışsa en fazla bu kadar geçmiş kesişim uyarısı gönderilir
 MAX_REPORT_CHARS = 3800  # Telegram'ın 4096 karakter sınırına güvenli pay bırak
-SIGNAL_LABELS = {2: "Güçlü al", 1: "Al", 0: "Nötr", -1: "Sat", -2: "Güçlü sat"}
-TREND_LABELS = {2: "Güçlü yükseliş", 1: "Yükseliş", 0: "Yatay", -1: "Düşüş", -2: "Güçlü düşüş"}
-STRETCH_LABELS = {2: "Dip bölgesi", 1: "Ucuz", 0: "Dengeli", -1: "Isınmış", -2: "Aşırı ısınmış"}
-LEGEND = ("ℹ️ Trend çubuğu: -100 güçlü düşüş, +100 güçlü yükseliş · "
-          "Aşırılık çubuğu: -100 aşırı ısınmış (pahalı), +100 dip bölgesi (ucuz)")
+LEGEND = "ℹ️ Dip Skoru: -100 aşırı şişmiş · 0 nötr · +100 güçlü dip (alım fırsatı yönünde)"
 BAR_WIDTH = 21  # skor çubuğundaki hücre sayısı (orta hücre = 0)
 
 
@@ -61,24 +57,9 @@ def configured_assets(cfg: dict) -> list[dict]:
     return assets
 
 
-def _cross_state_key(asset: dict, tf: str) -> str:
-    # BTC anahtarlarını koru ki eski state.json dosyalarında aynı kesişim tekrar bildirilmesin.
-    return f"cross_{tf}" if asset["ticker"] == "BTC" else f"cross_{asset['ticker']}_{tf}"
-
-
-def analyze(df, tf: str, cfg: dict, fg_info: dict | None = None):
-    """Döndürür: (mumlar, ham değerler, gösterge satırları, özet, trend). Fear & Greed yalnızca günlükte hesaba katılır."""
-    params = cfg["timeframes"].get(tf, {})
-    raw = compute_metrics(df, params)
-    rows = latest_rows(raw, params, tf, fg_info if tf == "1d" else None)
-    return df, raw, rows, trend_info(raw, params, tf)
-
-
-def score_value(rows: list[dict]) -> float:
-    """Geçerli göstergelerin dereceleri (-2..+2) ortalamasının 50 katı: -100 (hepsi güçlü sat) .. +100 (hepsi güçlü al).
-    Hiç geçerli gösterge yoksa NaN."""
-    mean = summarize(rows)["mean"]
-    return float("nan") if pd.isna(mean) else float(mean) * 50
+def analyze(df, tf: str, cfg: dict) -> dict:
+    """Son kapanmış mum için göstergeleri, etiketleri ve genel skoru (Dip Skoru) hesaplar."""
+    return dict(df=df, **evaluate(df, build_indicators(cfg.get("indicators"))))
 
 
 def score_bar(score: float, width: int = BAR_WIDTH) -> str:
@@ -91,26 +72,23 @@ def score_bar(score: float, width: int = BAR_WIDTH) -> str:
     return f"-100 {''.join(cells)} +100"
 
 
-def _score_lines(title: str, rows: list[dict], labels: dict) -> list[str]:
-    score = score_value(rows)
+def _score_lines(result: dict) -> list[str]:
+    score = result["score"]
     if pd.isna(score):
-        return [f"{title}: ❔ Yetersiz veri"]
-    level = summarize(rows)["level"]
+        return ["🎯 Dip Skoru: ❔ Yetersiz veri"]
     value = int(round(score))
     shown = f"{value:+d}" if value else "0"
-    return [f"{title}: {shown} · {LEVELS[level][0]} {labels[level]}", score_bar(score)]
+    partial = f" ({result['active']}/{result['total']} gösterge)" if result["active"] != result["total"] else ""
+    return [f"🎯 Dip Skoru: {shown} · {ICONS[result['label']]} {result['label']}{partial}", score_bar(score)]
 
 
 def _score_summary(results, asset: dict) -> list[str]:
     quote = asset["symbol"].split("/")[-1]
-    close = results["1d"][1]["close"]
+    daily = results["1d"]
     lines = [f"🪙 {asset['ticker']} — {asset['name']}",
-             f"💰 Günlük kapanış ({close.index[-1]:%d.%m.%Y}): {close.iloc[-1]:,.8g} {quote}"]
+             f"💰 Günlük kapanış ({daily['date']:%d.%m.%Y}): {daily['close']:,.8g} {quote}"]
     for tf, timeframe in TF_TR.items():
-        groups = split_rows(results[tf][2], results[tf][1])
-        lines += ["", f"📅 {timeframe.upper()}",
-                  *_score_lines("📈 Trend", groups["trend"], TREND_LABELS),
-                  *_score_lines("🌡️ Aşırılık", groups["stretch"], STRETCH_LABELS)]
+        lines += ["", f"📅 {timeframe.upper()}", *_score_lines(results[tf])]
     return lines
 
 
@@ -121,21 +99,6 @@ def fear_greed_line(fg_info: dict | None) -> str:
                       if fg_info.get(k) is not None)
     emoji = sentiment.EMOJI.get(fg_info["label"], "")
     return f"{emoji} Fear & Greed: {fg_info['value']:.0f} — {fg_info['label']}" + (f" ({hist})" if hist else "")
-
-
-def cross_message(tf: str, ts, kind: int, results, asset: dict | None = None) -> str:
-    df, raw, rows, trend = results[tf]
-    asset = asset or {"ticker": "BTC", "name": "Bitcoin", "symbol": "BTC/USDT"}
-    quote = asset["symbol"].split("/")[-1]
-    fast, slow = trend["fast"], trend["slow"]
-    golden = kind == 1
-    close = raw["close"].loc[ts]
-    return "\n".join([
-        f"{'🟢' if golden else '🔴'} {asset['ticker']} {TF_UP[tf]} — {'GOLDEN CROSS (olumlu sinyal)' if golden else 'DEAD CROSS (olumsuz sinyal)'}",
-        f"{asset['name']} ({asset['symbol']}) için {ts:%d.%m.%Y} mumu kapandı: hızlı ortalama (SMA{fast}), "
-        f"yavaş ortalamayı (SMA{slow}) {'yukarı' if golden else 'aşağı'} kesti. Kapanış {close:,.8g} {quote}.",
-        "Not: Kesişim gecikmeli bir onay sinyalidir; fiyat çoğu zaman haftalardır o yönde hareket ediyordur. "
-        "Ortalamalar sık kesiştiği için yanlış alarm da olabilir."])
 
 
 def report_messages(results_by_ticker, assets: list[dict], first_run: bool = False,
@@ -152,7 +115,7 @@ def report_messages(results_by_ticker, assets: list[dict], first_run: bool = Fal
             sections += [LEGEND, fear_greed_line(fg_info)]
         messages.append("\n\n".join([header, *sections]))
     if any(len(message) > MAX_REPORT_CHARS for message in messages):
-        raise ValueError("Gösterge raporu Telegram mesaj sınırını aşıyor.")
+        raise ValueError("Skor raporu Telegram mesaj sınırını aşıyor.")
     return messages
 
 
@@ -178,7 +141,7 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
                 raise RuntimeError(f"{asset['ticker']} {TF_TR[tf]}: yalnızca {len(df)} mum alındı "
                                    f"(en az {MIN_BARS[tf]} gerekir). Borsa geçmişi kısa olabilir; "
                                    "yanlış rapor üretmemek için durduruldu.")
-            results[tf] = analyze(df, tf, cfg, fg_info)
+            results[tf] = analyze(df, tf, cfg)
         results_by_ticker[asset["ticker"]] = results
 
     state = load_state(state_path)
@@ -192,26 +155,13 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
     new_state.pop("last_news", None)  # eski sürümden kalan haber Telegram durumu
     for old in ("1d", "1w", "1M", "zone_1d", "zone_1w"):  # eski sürümlerin kalıntıları
         new_state.pop(old, None)
-    if cfg.get("cross_alerts", True):  # yeni golden/dead cross olursa ayrı bir uyarı (ilk çalışmada yalnızca durum kaydedilir)
-        for asset in assets:
-            results = results_by_ticker[asset["ticker"]]
-            for tf in TF_UP:
-                raw, evs = results[tf][1], cross_events(results[tf][1])
-                key = _cross_state_key(asset, tf)
-                seen = state.get(key)
-                if seen is not None:
-                    since = pd.Timestamp(seen) if seen else None
-                    messages += [cross_message(tf, ts, k, results, asset)
-                                 for ts, k in cross_events(raw, since)[-MAX_CROSS_ALERTS:]]
-                new_state[key] = evs[-1][0].isoformat() if evs else ""
+    for key in [k for k in new_state if k.startswith(("cross_", "rating_"))]:  # kaldırılan cross uyarısı / eski dereceler
+        new_state.pop(key)
     today = f"{datetime.now(IST):%Y-%m-%d}"
     first_run = not state.get("last_report")
     if first_run or (cfg.get("daily_report", True) and state.get("last_report") != today):
         messages += report_messages(results_by_ticker, assets, first_run=first_run, fg_info=fg_info)
         new_state["last_report"] = today  # günde en fazla bir rapor
-        for asset in assets:
-            for tf in TF_UP:
-                new_state.pop(f"rating_{asset['ticker']}_{tf}", None)
     for m in messages:
         send(m)
     if not dry_run:  # sadece gönderim başarılıysa buraya gelinir

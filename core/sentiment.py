@@ -1,5 +1,5 @@
 """Crypto Fear & Greed Index (alternative.me): ücretsiz, anahtar gerekmez. 2018-02-01'den beri günlük veri.
-Düşük değer (korku) fiyatın şişmediğine işaret sayılır; günlük dip/şişkinlik puanına dahildir (bkz. zones.py)."""
+Yalnızca bilgi amaçlı gösterilir (rapor sonu ve panel); genel skora girmez."""
 from __future__ import annotations
 
 import json

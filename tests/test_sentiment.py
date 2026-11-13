@@ -7,9 +7,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_core import synthetic
 from core import sentiment
-from core.zones import compute_metrics, latest_rows, summarize
 
 time.sleep = lambda s: None
 days = pd.date_range("2018-02-01", periods=1000, freq="D", tz="UTC")
@@ -27,14 +25,8 @@ assert [sentiment.classify(v) for v in (10, 30, 50, 60, 90)] == ["Aşırı korku
 info = sentiment.summary(parsed)
 assert info["value"] == parsed.iloc[-1] and info["yesterday"] == parsed.iloc[-2] and info["month"] == parsed.iloc[-31]
 
-# 3) PUANA DAHİL: korku (düşük değer) AL tarafı, açgözlülük SAT tarafı; sınıf sınırlarıyla uyumlu
-raw = compute_metrics(synthetic(1500, seed=2))
-grade_of = lambda v: [r for r in latest_rows(raw, {}, "1d", dict(info, value=float(v), label=sentiment.classify(v)))
-                      if r["key"] == "fear_greed"][0]["grade"]
-assert [grade_of(v) for v in (5, 10, 11, 24, 25, 50, 74, 75, 89, 90, 95)] == [2, 2, 1, 1, 0, 0, 0, -1, -1, -2, -2]
+# 3) yalnızca bilgi: sınıf sınırları (genel skora girmez, bkz. tests/test_check.py)
 assert sentiment.classify(24) == "Aşırı korku" and sentiment.classify(25) == "Korku" and sentiment.classify(75) == "Aşırı açgözlülük"
-assert all(r["key"] != "fear_greed" for r in latest_rows(raw, {}, "1w")), "haftalıkta F&G olmamalı"
-assert summarize(latest_rows(raw, {}, "1d", info))["n"] == 9 and summarize(latest_rows(raw, {}, "1d"))["n"] == 8
 
 # 4) API çökerse: yeniden dene -> taze önbellek -> yoksa hata
 def boom(*a, **k): raise OSError("bağlantı yok")

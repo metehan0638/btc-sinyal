@@ -20,29 +20,18 @@ assets:
     symbol: XRP/USDT
     since: "2018-05-04"
 
-# Her gösterge değerine göre -2..+2 puan alır (güçlü sat -2, sat -1, nötr 0, al +1, güçlü al +2).
-# Telegram raporunda göstergeler iki gruba ayrılıp her grubun puan ortalaması (x50 = -100..+100) ayrı skor olarak gösterilir:
-#   Trend: Ichimoku, golden/dead cross, fiyatın uzun ortalamaya göre yönü
-#   Aşırılık: momentum osilatörleri (RSI+StochRSI+Bollinger+MFI ortalaması = TEK oy), fiyat/ortalama oranı, ATH'den uzaklık, Fear & Greed (günlükte)
+# DİP SKORU (genel skor, -100..+100)
+# Her gösterge yalnızca 5 etiketten birini üretir: Güçlü Dip · Dip · Nötr · Şişmiş · Aşırı Şişmiş.
+# Etiketler ortak puana çevrilir (+100 · +50 · 0 · -50 · -100) ve genel skor = toplam puan / aktif gösterge sayısıdır.
+# Verisi olmayan gösterge nötr sayılmaz, hesaba girmez. Skor her zaman -100..+100 arasındadır.
+# Genel skor etiketi: >= +60 Güçlü Dip · >= +20 Dip · -20..+20 Nötr · <= -20 Şişmiş · <= -60 Aşırı Şişmiş.
+#
+# Skora girecek göstergeler (yalnızca burada listelenenler kullanılır). Yeni gösterge eklemek için core/indicators.py içinde
+# sınıfı yazıp REGISTRY'e ekle, sonra buraya anahtarını yaz.
+#   rsi: Wilder RSI. < 30 Güçlü Dip · 30-35 Dip · 35-65 Nötr · 65-70 Şişmiş · > 70 Aşırı Şişmiş (eşikler kodda sabittir)
+indicators:
+  rsi:
+    period: 14
 
-# Golden/dead cross de bir gösterge sayılır: golden yapısı +1, dead yapısı -1; kesişim yeniyse (günlük 14, haftalık 4 mum içinde) +-2.
-cross_alerts: true                       # yeni golden/dead cross olunca ayrıca anlık uyarı gönder
-
-# Zaman dilimine özel ayarlar (belirtilmeyenler varsayılan kalır).
-# bands: gösterge: [t1, t2, t3, t4]  ->  değer <= t1 GÜÇLÜ AL · <= t2 AL · t2-t3 arası NÖTR · >= t3 SAT · >= t4 GÜÇLÜ SAT
-# Varsayılanlar:
-#   rsi [20,30,70,80] · stochrsi [10,20,80,90] · bollinger [0,0.10,0.90,1.0] · mfi [10,20,80,90]
-#   ma_ratio günlük [0.8,1.0,2.0,2.4], haftalık [1.0,1.3,2.5,3.5] · drawdown [-65,-50,-10,-3] · fear_greed [10,24,75,90]
-# Bunlar başlangıç değerleridir; kendi görüşüne göre değiştirebilirsin.
-# cross: [hızlı, yavaş] SMA periyotları. Haftalıkta 50/200; aylıkta 6/18 kullanılır.
-timeframes:
-  1d:
-    ma_long: 200            # fiyat / 200 günlük ortalama
-    cross: [50, 200]
-  1w:
-    ma_long: 200            # fiyat / 200 haftalık ortalama
-    cross: [50, 200]
-  1M:
-    ma_long: 24             # fiyat / 24 aylık ortalama
-    cross: [6, 18]           # aylıkta SMA 50/200 için geçmiş yetersiz
-    ichimoku: [9, 26, 52]
+fear_greed: true                         # rapor sonunda ve panelde bilgi olarak gösterilir; skora GİRMEZ
+daily_report: true                       # günde bir Telegram raporu

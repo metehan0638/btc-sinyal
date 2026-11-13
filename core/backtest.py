@@ -4,28 +4,19 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from core.charting import indicator_series
-from core.zones import METRIC_KEYS, bands_for, grade_series
+from core.indicators import Indicator
+from core.scoring import BUY_SIDE_FROM, score_history
 
 PERIODS_PER_YEAR = {"1d": 365.25, "1w": 52.18, "1M": 12.0}
-BASE_INDICATORS = (*METRIC_KEYS, "ichimoku", "cross")
+OVERALL_KEY = "overall"  # genel skor (Dip Skoru) satırı
 
 
-def grades_for_backtest(raw: pd.DataFrame, tf: str, params: dict | None = None,
-                        fear_greed: pd.Series | None = None) -> pd.DataFrame:
-    """Paneldeki her göstergenin tarihsel derecesini ayrı bir sütunda döndürür."""
-    if tf not in PERIODS_PER_YEAR:
-        raise ValueError(f"Desteklenmeyen zaman dilimi: {tf}")
-    params = params or {}
-    bands = bands_for(params, tf)
-    columns = {key: grade_series(raw[key], bands[key]) for key in METRIC_KEYS}
-    for key in ("cross", "ichimoku"):
-        columns[key] = indicator_series(raw, key, tf, params)[0]
-    if tf == "1d" and fear_greed is not None:
-        values = fear_greed.reindex(raw.index.normalize()).to_numpy()
-        fg = pd.Series(values, index=raw.index, dtype=float)
-        columns["fear_greed"] = grade_series(fg, bands["fear_greed"])
-    return pd.DataFrame(columns, index=raw.index)
+def signals_for_backtest(history: pd.DataFrame) -> pd.DataFrame:
+    """Backtest sinyalleri: her gösterge için etiket puanı (Dip +50, Güçlü Dip +100; AL tarafı puan > 0) ve
+    genel skor için 1 (skor >= +20, yani nihai etiket Dip/Güçlü Dip) veya 0. Veri yoksa NaN."""
+    columns = {key: history[key] for key in history.columns if key not in ("score", "active", "label")}
+    columns[OVERALL_KEY] = (history["score"] >= BUY_SIDE_FROM).astype(float).where(history["score"].notna())
+    return pd.DataFrame(columns, index=history.index)
 
 
 def _stats(equity: pd.Series, trades: list[dict], bars_per_year: float,
@@ -145,18 +136,20 @@ def simulate_buy_hold(df: pd.DataFrame, fee_pct: float = 0.1, name: str = "Varl�
     return (df["close"] * qty * (1 - fee)).rename(name)
 
 
-def run_backtests(df: pd.DataFrame, raw: pd.DataFrame, tf: str, params: dict | None = None,
-                  fear_greed: pd.Series | None = None, keys: tuple[str, ...] | None = None,
+def run_backtests(df: pd.DataFrame, indicators: list[Indicator], tf: str, keys: tuple[str, ...] | None = None,
                   start: pd.Timestamp | None = None, target_pct: float = 30.0,
-                  fee_pct: float = 0.1, ticker: str = "BTC") -> dict:
-    """Seçilen aralıkta her göstergenin bağımsız sonucunu ve varlık al-tut kıyasını hesaplar.
+                  fee_pct: float = 0.1, ticker: str = "BTC", history: pd.DataFrame | None = None) -> dict:
+    """Seçilen aralıkta her göstergenin ve genel skorun bağımsız sonucunu ve varlık al-tut kıyasını hesaplar.
 
     Göstergeler tüm tarih serisinde hesaplanıp sonradan tarihe göre daraltılır; böylece
     seçilen aralığın başlangıcında ısınma dönemi ve yapay AL sinyali oluşmaz.
     """
-    if not df.index.equals(raw.index):
-        raise ValueError("Mum ve ham gösterge serilerinin indeksleri aynı olmalı.")
-    grades_all = grades_for_backtest(raw, tf, params, fear_greed)
+    if tf not in PERIODS_PER_YEAR:
+        raise ValueError(f"Desteklenmeyen zaman dilimi: {tf}")
+    history = score_history(df, indicators) if history is None else history
+    if not df.index.equals(history.index):
+        raise ValueError("Mum ve skor geçmişi serilerinin indeksleri aynı olmalı.")
+    grades_all = signals_for_backtest(history)
     selected = df if start is None else df.loc[df.index >= start]
     if selected.empty:
         raise ValueError("Seçilen tarih aralığında mum verisi yok.")

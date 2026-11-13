@@ -1,4 +1,4 @@
-"""Kripto varlıklar için gösterge dereceleri paneli.  Çalıştır:  streamlit run app.py"""
+"""Kripto varlıklar için Dip Skoru paneli.  Çalıştır:  streamlit run app.py"""
 import json
 from pathlib import Path
 from datetime import datetime, timezone
@@ -11,14 +11,11 @@ import yaml
 from plotly.subplots import make_subplots
 
 from core.data import get_candles
-from core.charting import indicator_series
-from core.backtest import run_backtests
-from core.scores import (HORIZONS, STRETCH_NAMES, TREND_NAMES, bucket_table, levels, matrix_table,
-                         score_history)
+from core.backtest import OVERALL_KEY, run_backtests
+from core.indicators import BAR_NAME, ICONS, MIN_BARS, POINTS, build_indicators
+from core.scoring import HORIZONS, MILD_FROM, STRONG_FROM, bucket_table, evaluate, score_history
 from core.news import IST, analyze_with_history as analyze_news
 from core.sentiment import EMOJI as FG_EMOJI, fetch_fear_greed, summary as fg_summary
-from core.zones import (FRESH_BARS, LEVELS, LEVEL_TITLE, METRIC_KEYS, MIN_BARS, RATING_TEXT, BAR_NAME, bands_for, compute_metrics, latest_rows,
-                        trend_info)
 
 CFG = yaml.safe_load(open(Path(__file__).parent / "config.yaml", encoding="utf-8"))
 ASSETS = CFG.get("assets") or [{"ticker": CFG.get("symbol", "BTC/USDT").split("/")[0],
@@ -30,8 +27,13 @@ ASSETS = [{"ticker": asset.get("ticker", asset["symbol"].split("/")[0]),
           for asset in ASSETS]
 ASSET_BY_SYMBOL = {asset["symbol"]: asset for asset in ASSETS}
 TF_LABEL = {"1d": "Günlük", "1w": "Haftalık", "1M": "Aylık"}
-GRADE_NAME = {g: f"{icon} {LEVEL_TITLE[g]}" for g, (icon, _) in LEVELS.items()}
-BAND_COLORS = ["#1b5e20", "#66bb6a", "#ef5350", "#b71c1c"]  # t1 güçlü al, t2 al, t3 sat, t4 güçlü sat
+INDICATOR_SPEC = CFG.get("indicators")  # None: varsayılan (RSI)
+INDICATORS = build_indicators(INDICATOR_SPEC)
+INDICATOR_BY_KEY = {indicator.key: indicator for indicator in INDICATORS}
+names = {indicator.key: indicator.name for indicator in INDICATORS}
+SCORE_STEPS = [(-100, -STRONG_FROM, "#b71c1c"), (-STRONG_FROM, -MILD_FROM, "#ef5350"), (-MILD_FROM, MILD_FROM, "#9e9e9e"),
+               (MILD_FROM, STRONG_FROM, "#66bb6a"), (STRONG_FROM, 100, "#1b5e20")]
+SCORE_LINES = [(STRONG_FROM, "#1b5e20"), (MILD_FROM, "#66bb6a"), (-MILD_FROM, "#ef5350"), (-STRONG_FROM, "#b71c1c")]
 
 st.set_page_config(page_title="Kripto Takip Paneli", page_icon="🪙", layout="wide")
 
@@ -47,7 +49,7 @@ with st.sidebar:
     if st.button("🔄 Veriyi yenile"):
         st.session_state.nonce += 1
     st.caption("Veri 1 saat önbelleğe alınır. Hesaplar yalnızca KAPANMIŞ mumlara göre yapılır. "
-               "Derece aralıklarını config.yaml içinden değiştirebilirsin.")
+               "Skora girecek göstergeleri config.yaml içindeki `indicators:` bölümünden belirlersin.")
 
 
 @st.cache_data(ttl=3600, show_spinner="Mum verisi alınıyor...")
@@ -78,14 +80,15 @@ def load_fg(nonce):
     return fetch_fear_greed()
 
 
-@st.cache_data(ttl=3600, show_spinner="Bağımsız gösterge backtestleri hesaplanıyor...")
-def load_backtests(df, raw, tf, params, fear_greed, keys, start, target_pct, fee_pct, ticker):
-    return run_backtests(df, raw, tf, params, fear_greed, keys, start, target_pct, fee_pct, ticker)
-
-
 @st.cache_data(ttl=3600, show_spinner="Skor geçmişi hesaplanıyor...")
-def load_score_history(raw, tf, params, fear_greed):
-    return score_history(raw, tf, params, fear_greed)
+def load_history(df, spec):
+    return score_history(df, build_indicators(spec))
+
+
+@st.cache_data(ttl=3600, show_spinner="Gösterge backtestleri hesaplanıyor...")
+def load_backtests(df, spec, tf, keys, start, target_pct, fee_pct, ticker):
+    return run_backtests(df, build_indicators(spec), tf, keys=keys, start=start, target_pct=target_pct,
+                         fee_pct=fee_pct, ticker=ticker)
 
 
 fg_series, fg_info = None, None
@@ -93,28 +96,13 @@ if CFG.get("fear_greed", True):
     try:
         fg_series = load_fg(st.session_state.nonce)
         fg_info = fg_summary(fg_series)
-    except Exception as e:  # alınamazsa panel yine çalışır, günlük puan Fear & Greed'siz hesaplanır
-        st.info(f"Fear & Greed endeksi alınamadı ({e}). Günlük puan bu gösterge olmadan hesaplandı.")
+    except Exception as e:  # alınamazsa panel yine çalışır; Fear & Greed zaten skora girmez
+        st.info(f"Fear & Greed endeksi alınamadı ({e}). Bu bilgi satırı gösterilmeyecek; Dip Skoru etkilenmez.")
 
 
 def analyze(tf, asset):
     df = load_candles(asset["symbol"], tf, tuple(CFG["exchanges"]), asset["since"], st.session_state.nonce)
-    params = CFG["timeframes"].get(tf, {})
-    raw = compute_metrics(df, params)
-    # Eski/önceden yüklenmiş core.zones modülü Ichimoku çizgilerini üretip
-    # derece sütununu üretmiyor olabilir; grafik ve tablo aynı kuralı kullansın.
-    if "ichimoku_grade" not in raw:
-        span_a, span_b = raw["ichimoku_span_a"], raw["ichimoku_span_b"]
-        top = pd.concat([span_a, span_b], axis=1).max(axis=1)
-        bottom = pd.concat([span_a, span_b], axis=1).min(axis=1)
-        valid = span_a.notna() & span_b.notna()
-        above, below = raw["close"] > top, raw["close"] < bottom
-        bullish = above & (raw["ichimoku_tenkan"] > raw["ichimoku_kijun"]) & (span_a > span_b)
-        bearish = below & (raw["ichimoku_tenkan"] < raw["ichimoku_kijun"]) & (span_a < span_b)
-        raw["ichimoku_grade"] = np.select([bullish, bearish, above & valid, below & valid], [2, -2, 1, -1], default=0).astype(float)
-        raw.loc[~valid, "ichimoku_grade"] = np.nan
-    rows = latest_rows(raw, params, tf, fg_info if tf == "1d" else None)
-    return df, raw, rows, params, trend_info(raw, params, tf)
+    return df, load_history(df, INDICATOR_SPEC), evaluate(df, INDICATORS)
 
 
 try:
@@ -125,18 +113,24 @@ except Exception as e:
     st.stop()
 
 
+def score_text(result):
+    if pd.isna(result["score"]):
+        return "Yetersiz veri", None
+    return f"{result['score']:+.0f}", f"{ICONS[result['label']]} {result['label']}"
+
+
 # ---------------- başlık + özet ----------------
 st.title("Kripto Takip Paneli")
 st.caption(f"{asset['name']} · {asset['symbol']}")
 cols = st.columns(4)
-for col, tf in zip(cols[:3], TF_LABEL):
-    df, raw, rows, _, _trend = data[tf]
-    col.metric(f"{TF_LABEL[tf]} mum kapanışı", str(df.index[-1].date()))
+for col, tf_ in zip(cols[:3], TF_LABEL):
+    value, label = score_text(data[tf_][2])
+    col.metric(f"{TF_LABEL[tf_]} Dip Skoru", value, label, delta_color="off")
 if fg_info:
-    cols[3].metric("Fear & Greed", f"{fg_info['value']:.0f} · {fg_info['label']}",
+    cols[3].metric("Fear & Greed (bilgi)", f"{fg_info['value']:.0f} · {fg_info['label']}",
                    f"dün {fg_info['yesterday']:.0f}" if fg_info["yesterday"] is not None else None, delta_color="off")
 else:
-    cols[3].metric("Fear & Greed", "-")
+    cols[3].metric("Fear & Greed (bilgi)", "-")
 for tf_, (df_, *_rest) in data.items():
     if len(df_) < MIN_BARS[tf_]:
         st.warning(f"{TF_LABEL[tf_]}: yalnızca {len(df_)} mum alındı (en az {MIN_BARS[tf_]} beklenir). "
@@ -144,95 +138,94 @@ for tf_, (df_, *_rest) in data.items():
 
 # ---------------- zaman dilimi seçimi ----------------
 tf = st.radio("Zaman dilimi", list(TF_LABEL), format_func=TF_LABEL.get, horizontal=True)
-df, raw, rows, params, trend = data[tf]
+df, history, result = data[tf]
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Güncel durum", "📈 Grafik", "🔥 Haber / Hype", "📉 Geçmiş performans",
                                          "🎯 Skor geçmişi"])
 
 # ---------------- sekme 1: güncel durum ----------------
 with tab1:
-    st.subheader(f"{TF_LABEL[tf]}: bağımsız gösterge dereceleri")
+    st.subheader(f"{TF_LABEL[tf]}: Dip Skoru")
+    score = result["score"]
+    left, right = st.columns([1, 2])
+    gauge = go.Figure(go.Indicator(
+        mode="gauge+number", value=None if pd.isna(score) else round(score, 1),
+        number=dict(valueformat="+.0f"),
+        gauge=dict(axis=dict(range=[-100, 100], tickvals=[-100, -60, -20, 0, 20, 60, 100]),
+                   bar=dict(color="#263238", thickness=0.25),
+                   steps=[dict(range=[lo, hi], color=color) for lo, hi, color in SCORE_STEPS])))
+    gauge.update_layout(height=260, margin=dict(l=20, r=20, t=30, b=10))
+    left.plotly_chart(gauge, width="stretch", alt=f"{TF_LABEL[tf]} Dip Skoru göstergesi (-100 aşırı şişmiş, +100 güçlü dip)")
+    if pd.isna(score):
+        right.warning("Hiçbir gösterge henüz veri üretmedi, skor hesaplanamadı.")
+    else:
+        right.markdown(f"### {ICONS[result['label']]} {result['label']}")
+        total_points = sum(result["points"].values())
+        right.write(f"Genel skor = toplam puan / aktif gösterge sayısı = **{total_points:+d} / {result['active']} = {score:+.1f}**")
+        if result["active"] != result["total"]:
+            right.caption(f"{result['total'] - result['active']} gösterge henüz veri üretmediği için hesaba katılmadı (nötr sayılmaz).")
+    right.caption("Etiket sınırları: ≥ +60 Güçlü Dip · ≥ +20 Dip · -20 ile +20 arası Nötr · ≤ -20 Şişmiş · ≤ -60 Aşırı Şişmiş. "
+                  "Skor gerçek dip veya tepe garantisi değildir.")
+
+    table = pd.DataFrame([{
+        "Gösterge": result["names"][key],
+        "Değer": INDICATOR_BY_KEY[key].text(value) if pd.notna(value) else "-",
+        "Etiket": f"{ICONS[result['labels'][key]]} {result['labels'][key]}" if result["labels"][key] else "❔ Yetersiz veri",
+        "Puan": POINTS[result["labels"][key]] if result["labels"][key] else None,
+    } for key, value in result["values"].items()])
 
     def color(v):
         for prefix, css in (("🟢🟢", "#1b5e20"), ("🟢", "#388e3c"), ("🔴🔴", "#b71c1c"), ("🔴", "#e64a19"), ("⚪", "#555")):
-            if v.startswith(prefix):
+            if str(v).startswith(prefix):
                 return f"background-color:{css};color:white"
         return ""
 
-    table = pd.DataFrame([{"Gösterge": r["name"], "Değer": r["text"], "Derece": GRADE_NAME.get(r["grade"], "❔ Yetersiz veri"),
-                           "Yorum": r["note"]} for r in rows])
-    st.dataframe(table.style.map(color, subset=["Derece"]), hide_index=True, width="stretch")
-    if trend["state"] == trend["state"]:
-        st.caption(f"Cross: {trend['text']}. {trend['last_text']}. Golden yapısı +1, dead yapısı −1; kesişim yeniyse ±2 puan. "
-                   "Kesişim gecikmeli bir onay sinyalidir.")
+    st.dataframe(table.style.map(color, subset=["Etiket"]), hide_index=True, width="stretch")
+    st.caption("Her gösterge yalnızca 5 etiketten birini üretir; etiketler ortak puana çevrilir "
+               "(Güçlü Dip +100 · Dip +50 · Nötr 0 · Şişmiş -50 · Aşırı Şişmiş -100) ve eşit ağırlıkla ortalanır.")
 
-    last = raw.iloc[-1]
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Son kapanış (USDT)", f"{last.close:,.8g}")
-    c2.metric("ATH (en yüksek, mevcut geçmiş)", f"{last.ath:,.8g}")
-    c3.metric("ATH'den uzaklık", f"%{last.drawdown:.1f}")
+    c1, c2 = st.columns(2)
+    c1.metric("Son kapanmış mum", f"{result['date']:%d.%m.%Y}")
+    c2.metric("Son kapanış (USDT)", f"{result['close']:,.8g}")
 
     if fg_series is not None:
-        st.subheader("Piyasa duyarlılığı: Fear & Greed")
+        st.subheader("Piyasa duyarlılığı: Fear & Greed (bilgi)")
         st.write(f"{FG_EMOJI.get(fg_info['label'], '')} **{fg_info['value']:.0f} — {fg_info['label']}** "
                  + " · ".join(f"{n} {fg_info[k]:.0f}" for n, k in (("dün", "yesterday"), ("7 gün önce", "week"), ("30 gün önce", "month")) if fg_info[k] is not None))
         recent = fg_series.loc[fg_series.index[-1] - pd.DateOffset(years=1):]
         f3 = go.Figure(go.Scatter(x=recent.index, y=recent.values, mode="lines", name="Fear & Greed"))
-        for y, col_ in zip(bands_for(CFG["timeframes"].get("1d", {}), "1d")["fear_greed"], BAND_COLORS):
-            f3.add_hline(y=y, line_dash="dot", line_width=1, line_color=col_)
         f3.update_layout(height=280, yaxis=dict(range=[0, 100], title="0 = aşırı korku · 100 = aşırı açgözlülük"),
                          margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
-        st.plotly_chart(f3, width="stretch")
-        st.caption("Kaynak: alternative.me. Bu genel piyasa duyarlılığı göstergesi, seçili varlığın günlük derecesinde "
-                   "değerlendirilir: düşük değer (korku) AL, yüksek değer (açgözlülük) SAT tarafıdır.")
+        st.plotly_chart(f3, width="stretch", alt="Son bir yılın Fear & Greed endeksi")
+        st.caption("Kaynak: alternative.me. Yalnızca bilgi amaçlıdır; Dip Skoru'na dahil değildir.")
 
 # ---------------- sekme 2: grafik ----------------
 with tab2:
-    chart_keys = set(METRIC_KEYS) | {"cross", "ichimoku", "fear_greed"}
-    names = {r["key"]: r["name"] for r in rows if r["key"] in chart_keys}
     key = st.selectbox("Alt grafikte gösterilecek gösterge", list(names), format_func=names.get)
+    indicator = INDICATOR_BY_KEY[key]
     c1, c2 = st.columns(2)
     span = c1.selectbox("Aralık", ["Tümü", "Son 4 yıl", "Son 2 yıl", "Son 1 yıl"], index=1)
     log_y = c2.checkbox("Logaritmik fiyat ekseni", value=True)
     cut = {"Tümü": None, "Son 4 yıl": 4, "Son 2 yıl": 2, "Son 1 yıl": 1}[span]
     start = df.index[-1] - pd.DateOffset(years=cut) if cut else df.index[0]
-    d, r = df.loc[start:], raw.loc[start:]
-    fast_n, slow_n = trend["fast"], trend["slow"]
-    series, bands, value_range = indicator_series(r, key, tf, params, fg_series if key == "fear_greed" else None)
-    events = r[r["cross_event"] != 0]
-    golden, dead = events[events["cross_event"] > 0], events[events["cross_event"] < 0]
+    d, h = df.loc[start:], history.loc[start:]
+    values = indicator.compute(df).loc[start:]
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.04)
-    fig.add_trace(go.Candlestick(x=d.index, open=d.open, high=d.high, low=d.low, close=d.close,
-                                 name=asset["symbol"]), 1, 1)
-    fig.add_trace(go.Scatter(x=r.index, y=r["ma_fast"], name=f"SMA{fast_n}", line=dict(width=1.3)), 1, 1)
-    fig.add_trace(go.Scatter(x=r.index, y=r["ma_slow"], name=f"SMA{slow_n}", line=dict(width=1.3)), 1, 1)
-    fig.add_trace(go.Scatter(x=golden.index, y=golden["ma_slow"], mode="markers", name="Golden cross",
-                             marker=dict(symbol="triangle-up", size=13, color="#00c853")), 1, 1)
-    fig.add_trace(go.Scatter(x=dead.index, y=dead["ma_slow"], mode="markers", name="Dead cross",
-                             marker=dict(symbol="triangle-down", size=13, color="#ff1744")), 1, 1)
-    if key == "ichimoku":
-        fig.add_trace(go.Scatter(x=r.index, y=r["ichimoku_span_a"], name="Senkou Span A", line=dict(width=1)), 1, 1)
-        fig.add_trace(go.Scatter(x=r.index, y=r["ichimoku_span_b"], name="Senkou Span B", line=dict(width=1),
-                                 fill="tonexty", fillcolor="rgba(76,175,80,0.14)"), 1, 1)
-        fig.add_trace(go.Scatter(x=r.index, y=r["ichimoku_tenkan"], name="Tenkan-sen", line=dict(width=1)), 1, 1)
-        fig.add_trace(go.Scatter(x=r.index, y=r["ichimoku_kijun"], name="Kijun-sen", line=dict(width=1)), 1, 1)
-    fig.add_trace(go.Scatter(x=r.index, y=series.loc[r.index], name=names[key], line=dict(width=1.5, shape="hv" if key in ("cross", "ichimoku") else "linear")), 2, 1)
-    if key in METRIC_KEYS or key == "fear_greed":
-        for y, col_ in zip(bands, BAND_COLORS):
-            fig.add_hline(y=y, line_dash="dot", line_color=col_, row=2, col=1)
-    else:
-        for y in (-2, -1, 0, 1, 2):
-            fig.add_hline(y=y, line_dash="dot", line_color="#777", row=2, col=1)
-    fig.update_layout(height=700, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10), legend=dict(orientation="h"))
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.04)
+    fig.add_trace(go.Candlestick(x=d.index, open=d.open, high=d.high, low=d.low, close=d.close, name=asset["symbol"]), 1, 1)
+    fig.add_trace(go.Scatter(x=values.index, y=values.values, name=names[key], line=dict(width=1.5)), 2, 1)
+    for y, color_ in zip([level for level, _ in indicator.levels()], ("#1b5e20", "#66bb6a", "#ef5350", "#b71c1c")):
+        fig.add_hline(y=y, line_dash="dot", line_color=color_, row=2, col=1)
+    fig.add_trace(go.Scatter(x=h.index, y=h["score"], name="Dip Skoru", line=dict(width=1.5, shape="hv")), 3, 1)
+    for y, color_ in SCORE_LINES:
+        fig.add_hline(y=y, line_dash="dot", line_color=color_, row=3, col=1)
+    fig.update_layout(height=760, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10), legend=dict(orientation="h"))
     fig.update_yaxes(title_text="Fiyat", row=1, col=1, type="log" if log_y else "linear")
-    fig.update_yaxes(title_text=names[key], row=2, col=1, range=value_range)
-    st.plotly_chart(fig, width="stretch")
-    if key in METRIC_KEYS or key == "fear_greed":
-        st.caption(f"Çizgiler: koyu yeşil {bands[0]:g} · açık yeşil {bands[1]:g} · açık kırmızı {bands[2]:g} · koyu kırmızı {bands[3]:g} (derece eşikleri).")
-    elif key == "ichimoku":
-        st.caption("Üst grafikte fiyat, Ichimoku bulutu ve Tenkan/Kijun çizgileri; alt grafikte aynı göstergenin bağımsız −2…+2 derecesi gösterilir.")
-    else:
-        st.caption("Alt grafik kesişim derecesini gösterir: yeni kesişim +2/−2, eski golden/dead yapısı +1/−1, eşit ortalamalar 0.")
+    fig.update_yaxes(title_text=names[key], row=2, col=1, range=indicator.value_range)
+    fig.update_yaxes(title_text="Dip Skoru", row=3, col=1, range=[-105, 105])
+    st.plotly_chart(fig, width="stretch", alt=f"{asset['ticker']} fiyatı, {names[key]} ve Dip Skoru")
+    levels_text = " · ".join(text for _, text in indicator.levels())
+    st.caption(f"Orta grafik gösterge değeridir; noktalı çizgiler etiket eşikleridir ({levels_text}). "
+               "Alt grafik genel Dip Skoru'dur: +100 güçlü dip, -100 aşırı şişmiş; çizgiler ±20 ve ±60 etiket sınırlarıdır.")
 
 # ---------------- sekme 3: haber / hype ----------------
 with tab3:
@@ -271,8 +264,8 @@ with tab3:
 # ---------------- sekme 4: bağımsız geçmiş performans ----------------
 with tab4:
     st.subheader(f"{TF_LABEL[tf]}: gösterge bazında geçmiş performans")
-    st.caption("Her gösterge ayrı ve kendi başına %100 başlangıç bakiyesiyle simüle edilir. Ortak/ortalama sinyal puanı kullanılmaz.")
-    st.info("Kural: Derece 0 veya altından AL tarafına (+1/+2) yeni geçtiğinde, sonraki mum açılışında alım yapılır. "
+    st.caption("Her gösterge ve genel skor ayrı ayrı, kendi başına %100 başlangıç bakiyesiyle simüle edilir.")
+    st.info("Kural: Gösterge etiketi Nötr veya şişmiş tarafından Dip / Güçlü Dip'e (puan > 0), genel skor ise +20'nin altından +20 ve üstüne yeni geçtiğinde, sonraki mum açılışında alım yapılır. "
             "Mumun en yüksek fiyatı hedefe ulaştığında satış yapılır; mum hedefin üstünde açılırsa açılış fiyatı alınır. "
             "Zarar kes yoktur. Dönem sonunda açık işlem son kapanışta kapatılır; bu işlem hedefe ulaşmış sayılmaz. "
             "Komisyon uygulanır; spread ve fiyat kayması hesaba katılmaz.")
@@ -284,14 +277,13 @@ with tab4:
     years = {"Tümü": None, "Son 5 yıl": 5, "Son 3 yıl": 3, "Son 1 yıl": 1}[span]
     start = df.index[-1] - pd.DateOffset(years=years) if years else df.index[0]
 
-    available_keys = tuple(r["key"] for r in rows if r["key"] != "fear_greed" or (tf == "1d" and fg_series is not None))
+    available_keys = tuple(indicator.key for indicator in INDICATORS) + (OVERALL_KEY,)
+    display_names = {**names, OVERALL_KEY: "Genel skor (Dip Skoru ≥ +20)"}
     try:
-        report = load_backtests(df, raw, tf, params, fg_series, available_keys, start, target_pct, fee_pct,
-                                asset["ticker"])
+        report = load_backtests(df, INDICATOR_SPEC, tf, available_keys, start, target_pct, fee_pct, asset["ticker"])
     except Exception as e:
         st.error(f"Geçmiş performans hesaplanamadı: {e}")
     else:
-        display_names = {r["key"]: r["name"] for r in rows if r["key"] in available_keys}
         summary_rows = []
         for key in available_keys:
             result = report["results"][key]
@@ -311,7 +303,7 @@ with tab4:
                              "Piyasada geçen süre": 1.0})
         summary = pd.DataFrame(summary_rows).sort_values("Toplam getiri", ascending=False, na_position="last")
         st.caption(f"Simülasyon aralığı: {report['prices'].index[0]:%d.%m.%Y} – {report['prices'].index[-1]:%d.%m.%Y}. "
-                   "Tablo getiriye göre sıralıdır; bu sıralama birleşik bir gösterge puanı değildir. "
+                   "Tablo getiriye göre sıralıdır. "
                    "Kazançlı işlem oranına dönem sonu kapatılan işlemler de dahildir.")
         st.dataframe(summary, hide_index=True, width="stretch",
                      alt=f"Her göstergenin bağımsız backtest ölçümleri ve {asset['ticker']} al-tut karşılaştırması",
@@ -371,71 +363,42 @@ with tab4:
                 st.caption("Bu aralıkta yeni AL geçişi oluşmadığı için işlem açılmadı.")
 
 
-# ---------------- sekme 5: Trend / Aşırılık skorunun geçmişi ----------------
+# ---------------- sekme 5: Dip Skoru geçmişi ----------------
 with tab5:
-    st.subheader(f"{TF_LABEL[tf]}: Trend ve Aşırılık skorunun geçmişi")
-    st.caption("Skorlar Telegram raporuyla aynı kurallarla (aynı oylar, eşit ağırlık) her mum için hesaplanır; bir mumun skoru "
-               "yalnızca o muma kadar olan veriyi kullanır. Aşağıdaki tablolar \"skor bu bölgedeyken sonraki N mumda ne oldu\" "
-               "sorusunu yanıtlar. Gelecek için garanti değildir.")
-    history = load_score_history(raw, tf, params, fg_series if tf == "1d" else None)
+    st.subheader(f"{TF_LABEL[tf]}: Dip Skorunun geçmişi")
+    st.caption("Skor, Telegram raporuyla aynı kurallarla her mum için hesaplanır; bir mumun skoru yalnızca o muma kadarki veriyi "
+               "kullanır. Tablo \"skor bu etikette iken sonraki N mumda ne oldu\" sorusunu yanıtlar. Gelecek için garanti değildir.")
     unit = BAR_NAME[tf]
-
-    last = history.iloc[-1]
-    last_levels = {column: levels(history[column]).iloc[-1] for column in ("trend", "stretch")}
-    now_cols = st.columns(2)
-    now_cols[0].metric("Trend (son kapanmış mum)", f"{last['trend']:+.0f}" if pd.notna(last["trend"]) else "-",
-                       TREND_NAMES[int(last_levels["trend"])] if pd.notna(last_levels["trend"]) else None, delta_color="off")
-    now_cols[1].metric("Aşırılık (son kapanmış mum)", f"{last['stretch']:+.0f}" if pd.notna(last["stretch"]) else "-",
-                       STRETCH_NAMES[int(last_levels["stretch"])] if pd.notna(last_levels["stretch"]) else None, delta_color="off")
-
     controls = st.columns(3)
-    horizon = controls[0].selectbox("İleri bakış", HORIZONS[tf], index=1, format_func=lambda h: f"{h} {unit}", key="sc_horizon")
+    horizon = controls[0].selectbox("İleri bakış", HORIZONS[tf], index=1, format_func=lambda h_: f"{h_} {unit}", key="sc_horizon")
     span = controls[1].selectbox("Grafik aralığı", ["Tümü", "Son 4 yıl", "Son 2 yıl", "Son 1 yıl"], index=1, key="sc_span")
     log_y = controls[2].checkbox("Logaritmik fiyat ekseni", value=True, key="sc_log")
     cut = {"Tümü": None, "Son 4 yıl": 4, "Son 2 yıl": 2, "Son 1 yıl": 1}[span]
     begin = df.index[-1] - pd.DateOffset(years=cut) if cut else df.index[0]
     shown = history.loc[begin:]
 
-    fig_sc = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.04)
+    fig_sc = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.04)
     fig_sc.add_trace(go.Scatter(x=shown.index, y=df["close"].loc[shown.index], name=asset["symbol"], line=dict(width=1.5)), 1, 1)
-    fig_sc.add_trace(go.Scatter(x=shown.index, y=shown["trend"], name="Trend", line=dict(width=1.3)), 2, 1)
-    fig_sc.add_trace(go.Scatter(x=shown.index, y=shown["stretch"], name="Aşırılık", line=dict(width=1.3)), 3, 1)
-    for row in (2, 3):
-        for y, color in ((50, "#1b5e20"), (15, "#66bb6a"), (-15, "#ef5350"), (-50, "#b71c1c")):
-            fig_sc.add_hline(y=y, line_dash="dot", line_color=color, row=row, col=1)
-    fig_sc.update_layout(height=640, margin=dict(l=10, r=10, t=25, b=10), legend=dict(orientation="h"), hovermode="x unified")
+    fig_sc.add_trace(go.Scatter(x=shown.index, y=shown["score"], name="Dip Skoru", line=dict(width=1.3, shape="hv")), 2, 1)
+    for y, color_ in SCORE_LINES:
+        fig_sc.add_hline(y=y, line_dash="dot", line_color=color_, row=2, col=1)
+    fig_sc.update_layout(height=560, margin=dict(l=10, r=10, t=25, b=10), legend=dict(orientation="h"), hovermode="x unified")
     fig_sc.update_yaxes(title_text="Fiyat", row=1, col=1, type="log" if log_y else "linear")
-    fig_sc.update_yaxes(title_text="Trend", row=2, col=1, range=[-105, 105])
-    fig_sc.update_yaxes(title_text="Aşırılık", row=3, col=1, range=[-105, 105])
-    st.plotly_chart(fig_sc, width="stretch", alt=f"{asset['ticker']} fiyatı, Trend skoru ve Aşırılık skoru geçmişi")
-    st.caption("Skor grafiklerinde noktalı çizgiler ±15 ve ±50 etiket sınırlarıdır. Trend: +100 güçlü yükseliş, -100 güçlü düşüş. "
-               "Aşırılık: +100 dip bölgesi (ucuz), -100 aşırı ısınmış (pahalı).")
+    fig_sc.update_yaxes(title_text="Dip Skoru", row=2, col=1, range=[-105, 105])
+    st.plotly_chart(fig_sc, width="stretch", alt=f"{asset['ticker']} fiyatı ve Dip Skoru geçmişi")
+    st.caption("Noktalı çizgiler ±20 ve ±60 etiket sınırlarıdır. +100 güçlü dip (alım fırsatı yönünde), -100 aşırı şişmiş.")
 
-    def bucket_view(table, names):
-        view = pd.DataFrame({"Bölge": [names.get(i, "Tüm mumlar (kıyas)") for i in table.index],
-                             "Mum": table["n"], "Zamanın payı": table["share"], "Ayrı dönem": table["episodes"],
-                             f"Ort. getiri ({horizon} {unit})": table["mean"], "Medyan": table["median"],
-                             "Getirisi pozitif": table["pos_rate"]})
-        return view.reset_index(drop=True)
-
-    percent_cfg = {name: st.column_config.NumberColumn(format="percent")
-                   for name in ("Zamanın payı", f"Ort. getiri ({horizon} {unit})", "Medyan", "Getirisi pozitif")}
-    st.markdown(f"##### Skor bölgesine göre sonraki {horizon} {unit}lık getiri")
-    for title, column, names in (("📈 Trend", "trend", TREND_NAMES), ("🌡️ Aşırılık", "stretch", STRETCH_NAMES)):
-        st.markdown(f"**{title}**")
-        st.dataframe(bucket_view(bucket_table(df["close"], history[column], horizon), names), hide_index=True, width="stretch",
-                     column_config=percent_cfg, alt=f"{title} skor bölgelerine göre ileri getiri istatistikleri")
-
-    mean_table, count_table = matrix_table(df["close"], history["trend"], history["stretch"], horizon)
-    st.markdown(f"##### Trend × Aşırılık: ortalama sonraki {horizon} {unit}lık getiri")
-    matrix_cols = st.columns(2)
-    matrix_cols[0].dataframe(mean_table, width="stretch", alt="Trend ve Aşırılık bölgelerine göre ortalama ileri getiri",
-                             column_config={c: st.column_config.NumberColumn(format="percent") for c in mean_table.columns})
-    matrix_cols[1].dataframe(count_table, width="stretch", alt="Her Trend ve Aşırılık hücresindeki mum sayısı")
-    st.caption("Sol tablo ortalama getiri, sağ tablo her hücredeki mum sayısıdır. Az mumlu hücrelere güvenme.")
-
+    table_sc = bucket_table(df["close"], history["label"], horizon)
+    view = pd.DataFrame({"Etiket": [f"{ICONS[i]} {i}" if i in ICONS else i for i in table_sc.index],
+                         "Mum": table_sc["n"], "Zamanın payı": table_sc["share"], "Ayrı dönem": table_sc["episodes"],
+                         f"Ort. getiri ({horizon} {unit})": table_sc["mean"], "Medyan": table_sc["median"],
+                         "Getirisi pozitif": table_sc["pos_rate"]}).reset_index(drop=True)
+    st.markdown(f"##### Dip Skoru etiketine göre sonraki {horizon} {unit}lık getiri")
+    st.dataframe(view, hide_index=True, width="stretch", alt="Dip Skoru etiketlerine göre ileri getiri istatistikleri",
+                 column_config={name: st.column_config.NumberColumn(format="percent")
+                                for name in ("Zamanın payı", f"Ort. getiri ({horizon} {unit})", "Medyan", "Getirisi pozitif")})
     st.info("Dikkat: (1) Bitişik mumların ileri getiri pencereleri birbirinin neredeyse aynısıdır; güvenilirliği 'Mum' değil "
-            "**'Ayrı dönem'** sütunu belirler. (2) Kripto geçmişi yalnızca birkaç boğa/ayı döngüsünden oluşur; bir bölgenin "
-            "sonuçları çoğu zaman bir iki döngüye aittir. (3) Getiriler kapanıştan kapanışa, komisyonsuzdur ve al-tut "
-            "getirisiyle (kıyas satırı) karşılaştırılmalıdır. (4) Geçmişte işleyen bir bölge gelecekte de işleyecek demek değildir. "
-            "(5) İstatistikler her zaman seçili zaman diliminin tüm geçmişinden hesaplanır; grafik aralığı yalnızca görünümü değiştirir.")
+            "**'Ayrı dönem'** sütunu (etikete ayrı giriş sayısı) belirler. (2) Kripto geçmişi yalnızca birkaç boğa/ayı döngüsünden oluşur; "
+            "bir etiketin sonuçları çoğu zaman bir iki döngüye aittir. (3) Getiriler kapanıştan kapanışa, komisyonsuzdur ve al-tut "
+            "getirisiyle (kıyas satırı) karşılaştırılmalıdır. (4) Geçmişte işleyen bir etiket gelecekte de işleyecek demek değildir. "
+            "(5) İstatistikler seçili zaman diliminin tüm geçmişinden hesaplanır; grafik aralığı yalnızca görünümü değiştirir.")
