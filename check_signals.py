@@ -21,9 +21,10 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from core import sentiment
+from core import mvrv, sentiment
 from core.data import get_candles
 from core.notifier import get_chats, load_env, send_telegram
+from core.external import memoize
 from core.sentiment import fetch_fear_greed
 from core.indicators import ICONS, MIN_BARS, build_indicators
 from core.scoring import evaluate
@@ -57,9 +58,10 @@ def configured_assets(cfg: dict) -> list[dict]:
     return assets
 
 
-def analyze(df, tf: str, cfg: dict) -> dict:
-    """Son kapanmış mum için göstergeleri, etiketleri ve genel skoru (Dip Skoru) hesaplar."""
-    return dict(df=df, **evaluate(df, build_indicators(cfg.get("indicators"))))
+def analyze(df, tf: str, cfg: dict, sources: dict | None = None) -> dict:
+    """Son kapanmış mum için göstergeleri, etiketleri ve genel skoru (Dip Skoru) hesaplar.
+    `sources`: dış veri kaynakları ({"fear_greed": fonksiyon, "mvrv": fonksiyon}); verilmezse gerçek API'ler kullanılır."""
+    return dict(df=df, **evaluate(df, build_indicators(cfg.get("indicators"), sources), tf))
 
 
 def score_bar(score: float, width: int = BAR_WIDTH) -> str:
@@ -123,15 +125,20 @@ def load_state(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
-def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetch=get_candles, fetch_fg=None) -> list[str]:
-    # Fear & Greed alınamazsa rapor o satır olmadan gider.
+def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetch=get_candles, fetch_fg=None,
+        fetch_mvrv=None) -> list[str]:
+    # Dış veriler süreç başına bir kez alınır; Fear & Greed hem gösterge hem rapor sonu bilgi satırı için kullanılır.
+    # Kaynak alınamazsa gösterge o çalışmada hesaba girmez (nötr sayılmaz), rapor yine gider.
+    sources = {"fear_greed": memoize(fetch_fg or fetch_fear_greed), "mvrv": memoize(fetch_mvrv or mvrv.fetch_mvrv_data)}
     fg_info = None
-    if cfg.get("fear_greed", True):
+    if cfg.get("fear_greed_info", True):
         try:
-            fg_info = sentiment.summary((fetch_fg or fetch_fear_greed)())
+            fg_info = sentiment.summary(sources["fear_greed"]())
         except Exception as e:  # noqa: BLE001
             print(f"[fear&greed] atlandı: {e}")
     assets = configured_assets(cfg)
+    if "mvrv" in (cfg.get("indicators") or {}) and any(asset["ticker"] != "BTC" for asset in assets):
+        raise ValueError("MVRV Z-Score yalnızca Bitcoin için hesaplanır; config.yaml'daki varlıklar arasında BTC dışında coin var.")
     results_by_ticker = {}
     for asset in assets:
         results = {}
@@ -141,7 +148,7 @@ def run(cfg, send, dry_run=False, status_only=False, state_path=STATE_FILE, fetc
                 raise RuntimeError(f"{asset['ticker']} {TF_TR[tf]}: yalnızca {len(df)} mum alındı "
                                    f"(en az {MIN_BARS[tf]} gerekir). Borsa geçmişi kısa olabilir; "
                                    "yanlış rapor üretmemek için durduruldu.")
-            results[tf] = analyze(df, tf, cfg)
+            results[tf] = analyze(df, tf, cfg, sources)
         results_by_ticker[asset["ticker"]] = results
 
     state = load_state(state_path)

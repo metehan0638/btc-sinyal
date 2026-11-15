@@ -2,23 +2,11 @@
 symbol: BTC/USDT
 exchanges: [binance, kraken, bitstamp]   # sırayla denenir, ilk çalışan kullanılır
 since: "2017-08-17"                      # Binance BTC/USDT başlangıcı
-assets:
+assets:                                  # sistemde yalnızca Bitcoin var (MVRV Z-Score yalnızca BTC içindir)
   - ticker: BTC
     name: Bitcoin
     symbol: BTC/USDT
     since: "2017-08-17"
-  - ticker: ETH
-    name: Ethereum
-    symbol: ETH/USDT
-    since: "2017-08-17"
-  - ticker: SOL
-    name: Solana
-    symbol: SOL/USDT
-    since: "2020-08-11"
-  - ticker: XRP
-    name: XRP
-    symbol: XRP/USDT
-    since: "2018-05-04"
 
 # DİP SKORU (genel skor, -100..+100)
 # Her gösterge yalnızca 5 etiketten birini üretir: Güçlü Dip · Dip · Nötr · Şişmiş · Aşırı Şişmiş.
@@ -27,11 +15,28 @@ assets:
 # Genel skor etiketi: >= +60 Güçlü Dip · >= +20 Dip · -20..+20 Nötr · <= -20 Şişmiş · <= -60 Aşırı Şişmiş.
 #
 # Skora girecek göstergeler (yalnızca burada listelenenler kullanılır). Yeni gösterge eklemek için core/indicators.py içinde
-# sınıfı yazıp REGISTRY'e ekle, sonra buraya anahtarını yaz.
-#   rsi: Wilder RSI. < 30 Güçlü Dip · 30-35 Dip · 35-65 Nötr · 65-70 Şişmiş · > 70 Aşırı Şişmiş (eşikler kodda sabittir)
+# sınıfı yazıp REGISTRY'e ekle, sonra buraya anahtarını yaz. Eşikler kodda sabittir.
+#   rsi:        Wilder RSI. < 30 Güçlü Dip · 30-35 Dip · 35-65 Nötr · 65-70 Şişmiş · > 70 Aşırı Şişmiş
+#   bollinger:  Bollinger %B (0 alt bant, 0.5 orta bant, 1 üst bant). < 0 Güçlü Dip · 0-0.10 Dip · 0.10-0.90 Nötr · 0.90-1 Şişmiş · > 1 Aşırı Şişmiş
+#   mfi:        Money Flow Index (hacimli RSI benzeri). < 20 Güçlü Dip · 20-30 Dip · 30-70 Nötr · 70-80 Şişmiş · > 80 Aşırı Şişmiş
+#   fear_greed: Fear & Greed endeksi (alternative.me, günlük). 0-10 Güçlü Dip · 11-34 Dip · 35-65 Nötr · 66-89 Şişmiş · 90-100 Aşırı Şişmiş
+#   mvrv:       MVRV Z-Score (Coin Metrics, yalnızca Bitcoin, günlük). < 0 Güçlü Dip · 0-1 Dip · 1-3 Nötr · 3-7 Şişmiş · >= 7 Aşırı Şişmiş
+# fear_greed ve mvrv günlük veridir: günlük mumda o günün değeri, haftalık/aylık mumda dönemin günlük ortalaması kullanılır
+# (aggregate: mean). aggregate: last yazarsan dönemin son günü alınır. Dönemin bir günü bile eksikse o mum için değer üretilmez.
+# mvrv için max_stale_days: yayın gecikmesinde son bilinen değerin en fazla kaç gün ileri taşınacağı.
 indicators:
   rsi:
     period: 14
+  bollinger:
+    period: 20
+    mult: 2
+  mfi:
+    period: 14
+  fear_greed:
+    aggregate: mean
+  mvrv:
+    aggregate: mean
+    max_stale_days: 2
 
-fear_greed: true                         # rapor sonunda ve panelde bilgi olarak gösterilir; skora GİRMEZ
+fear_greed_info: true                    # rapor sonunda ve panelde Fear & Greed değerini ayrıca göster (skor için fear_greed göstergesi gerekir)
 daily_report: true                       # günde bir Telegram raporu

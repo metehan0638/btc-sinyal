@@ -1,5 +1,5 @@
 """Crypto Fear & Greed Index (alternative.me): ücretsiz, anahtar gerekmez. 2018-02-01'den beri günlük veri.
-Yalnızca bilgi amaçlı gösterilir (rapor sonu ve panel); genel skora girmez."""
+Fear & Greed göstergesinin (core/indicators.py) veri kaynağıdır; ayrıca rapor sonunda ve panelde bilgi satırı olarak gösterilir."""
 from __future__ import annotations
 
 import json

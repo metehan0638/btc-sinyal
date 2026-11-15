@@ -12,10 +12,10 @@ from plotly.subplots import make_subplots
 
 from core.data import get_candles
 from core.backtest import OVERALL_KEY, run_backtests
-from core.indicators import BAR_NAME, ICONS, MIN_BARS, POINTS, build_indicators
+from core.indicators import BAR_NAME, ICONS, MIN_BARS, POINTS, build_indicators, clear_sources, default_sources
 from core.scoring import HORIZONS, MILD_FROM, STRONG_FROM, bucket_table, evaluate, score_history
 from core.news import IST, analyze_with_history as analyze_news
-from core.sentiment import EMOJI as FG_EMOJI, fetch_fear_greed, summary as fg_summary
+from core.sentiment import EMOJI as FG_EMOJI, summary as fg_summary
 
 CFG = yaml.safe_load(open(Path(__file__).parent / "config.yaml", encoding="utf-8"))
 ASSETS = CFG.get("assets") or [{"ticker": CFG.get("symbol", "BTC/USDT").split("/")[0],
@@ -42,12 +42,16 @@ if "nonce" not in st.session_state:
     st.session_state.nonce = 0
 with st.sidebar:
     st.header("Ayarlar")
-    selected_symbol = st.selectbox("Kripto varlık", list(ASSET_BY_SYMBOL),
-                                   format_func=lambda value: f"{ASSET_BY_SYMBOL[value]['name']} ({value})",
-                                   key="selected_asset")
+    if len(ASSET_BY_SYMBOL) > 1:
+        selected_symbol = st.selectbox("Kripto varlık", list(ASSET_BY_SYMBOL),
+                                       format_func=lambda value: f"{ASSET_BY_SYMBOL[value]['name']} ({value})",
+                                       key="selected_asset")
+    else:
+        selected_symbol = next(iter(ASSET_BY_SYMBOL))
     asset = ASSET_BY_SYMBOL[selected_symbol]
     if st.button("🔄 Veriyi yenile"):
         st.session_state.nonce += 1
+        clear_sources()  # Fear & Greed ve MVRV önbelleğini de boşalt
     st.caption("Veri 1 saat önbelleğe alınır. Hesaplar yalnızca KAPANMIŞ mumlara göre yapılır. "
                "Skora girecek göstergeleri config.yaml içindeki `indicators:` bölümünden belirlersin.")
 
@@ -77,12 +81,12 @@ def load_news(nonce):
 
 @st.cache_data(ttl=3600, show_spinner="Fear & Greed endeksi alınıyor...")
 def load_fg(nonce):
-    return fetch_fear_greed()
+    return default_sources()["fear_greed"]()
 
 
 @st.cache_data(ttl=3600, show_spinner="Skor geçmişi hesaplanıyor...")
-def load_history(df, spec):
-    return score_history(df, build_indicators(spec))
+def load_history(df, spec, tf):
+    return score_history(df, build_indicators(spec), tf)
 
 
 @st.cache_data(ttl=3600, show_spinner="Gösterge backtestleri hesaplanıyor...")
@@ -92,17 +96,17 @@ def load_backtests(df, spec, tf, keys, start, target_pct, fee_pct, ticker):
 
 
 fg_series, fg_info = None, None
-if CFG.get("fear_greed", True):
+if CFG.get("fear_greed_info", True):
     try:
         fg_series = load_fg(st.session_state.nonce)
         fg_info = fg_summary(fg_series)
-    except Exception as e:  # alınamazsa panel yine çalışır; Fear & Greed zaten skora girmez
-        st.info(f"Fear & Greed endeksi alınamadı ({e}). Bu bilgi satırı gösterilmeyecek; Dip Skoru etkilenmez.")
+    except Exception as e:  # alınamazsa panel yine çalışır; gösterge o çalışmada hesaba girmez
+        st.info(f"Fear & Greed endeksi alınamadı ({e}). Bu bilgi satırı gösterilmeyecek; Fear & Greed göstergesi de skora girmeyecek.")
 
 
 def analyze(tf, asset):
     df = load_candles(asset["symbol"], tf, tuple(CFG["exchanges"]), asset["since"], st.session_state.nonce)
-    return df, load_history(df, INDICATOR_SPEC), evaluate(df, INDICATORS)
+    return df, load_history(df, INDICATOR_SPEC, tf), evaluate(df, INDICATORS, tf)
 
 
 try:
@@ -127,10 +131,10 @@ for col, tf_ in zip(cols[:3], TF_LABEL):
     value, label = score_text(data[tf_][2])
     col.metric(f"{TF_LABEL[tf_]} Dip Skoru", value, label, delta_color="off")
 if fg_info:
-    cols[3].metric("Fear & Greed (bilgi)", f"{fg_info['value']:.0f} · {fg_info['label']}",
+    cols[3].metric("Fear & Greed", f"{fg_info['value']:.0f} · {fg_info['label']}",
                    f"dün {fg_info['yesterday']:.0f}" if fg_info["yesterday"] is not None else None, delta_color="off")
 else:
-    cols[3].metric("Fear & Greed (bilgi)", "-")
+    cols[3].metric("Fear & Greed", "-")
 for tf_, (df_, *_rest) in data.items():
     if len(df_) < MIN_BARS[tf_]:
         st.warning(f"{TF_LABEL[tf_]}: yalnızca {len(df_)} mum alındı (en az {MIN_BARS[tf_]} beklenir). "
@@ -188,7 +192,7 @@ with tab1:
     c2.metric("Son kapanış (USDT)", f"{result['close']:,.8g}")
 
     if fg_series is not None:
-        st.subheader("Piyasa duyarlılığı: Fear & Greed (bilgi)")
+        st.subheader("Piyasa duyarlılığı: Fear & Greed")
         st.write(f"{FG_EMOJI.get(fg_info['label'], '')} **{fg_info['value']:.0f} — {fg_info['label']}** "
                  + " · ".join(f"{n} {fg_info[k]:.0f}" for n, k in (("dün", "yesterday"), ("7 gün önce", "week"), ("30 gün önce", "month")) if fg_info[k] is not None))
         recent = fg_series.loc[fg_series.index[-1] - pd.DateOffset(years=1):]
@@ -196,7 +200,7 @@ with tab1:
         f3.update_layout(height=280, yaxis=dict(range=[0, 100], title="0 = aşırı korku · 100 = aşırı açgözlülük"),
                          margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
         st.plotly_chart(f3, width="stretch", alt="Son bir yılın Fear & Greed endeksi")
-        st.caption("Kaynak: alternative.me. Yalnızca bilgi amaçlıdır; Dip Skoru'na dahil değildir.")
+        st.caption("Kaynak: alternative.me. Günlük değerdir; Dip Skoru'na Fear & Greed göstergesi olarak girer (haftalık/aylıkta dönem ortalaması).")
 
 # ---------------- sekme 2: grafik ----------------
 with tab2:
@@ -208,7 +212,7 @@ with tab2:
     cut = {"Tümü": None, "Son 4 yıl": 4, "Son 2 yıl": 2, "Son 1 yıl": 1}[span]
     start = df.index[-1] - pd.DateOffset(years=cut) if cut else df.index[0]
     d, h = df.loc[start:], history.loc[start:]
-    values = indicator.compute(df).loc[start:]
+    values = indicator.compute(df, tf).loc[start:]
 
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.25, 0.25], vertical_spacing=0.04)
     fig.add_trace(go.Candlestick(x=d.index, open=d.open, high=d.high, low=d.low, close=d.close, name=asset["symbol"]), 1, 1)

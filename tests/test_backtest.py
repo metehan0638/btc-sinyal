@@ -8,7 +8,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.backtest import OVERALL_KEY, run_backtests, signals_for_backtest, simulate_indicator
 from core.indicators import RSIIndicator, build_indicators
-from test_core import synthetic
+from test_core import make_fg, make_mvrv_frame, synthetic
 
 
 def candles(opens, highs, closes):
@@ -85,6 +85,25 @@ def test_real_rsi_backtest_and_overall_match_when_rsi_is_the_only_indicator():
     assert np.isclose(report["results"]["rsi"]["total_return"], report["results"][OVERALL_KEY]["total_return"])
 
 
+def test_backtest_covers_all_five_indicators_and_the_overall_score():
+    five = {"rsi": {}, "bollinger": {}, "mfi": {}, "fear_greed": {}, "mvrv": {}}
+    sources = {"fear_greed": lambda: make_fg("2017-12-01", 1500, seed=3), "mvrv": lambda: make_mvrv_frame("2017-01-01", 2500)}
+    indicators = build_indicators(five, sources)
+    daily = synthetic(900, seed=21)
+    weekly = daily.resample("W-MON", label="left", closed="left").agg(
+        dict(open="first", high="max", low="min", close="last", volume="sum")).dropna()
+    for tf, frame in (("1d", daily), ("1w", weekly)):
+        report = run_backtests(frame, indicators, tf, target_pct=20, fee_pct=0.1, ticker="TST")
+        assert set(report["results"]) == {*five, OVERALL_KEY, "buy_hold"}, tf
+        assert all(report["results"][key]["available"] for key in five), tf
+        assert list(report["grades"].columns) == [*five, OVERALL_KEY]
+    # dış kaynak çökerse o gösterge "kullanılamaz" olarak işaretlenir, diğerleri çalışır
+    def down():
+        raise RuntimeError("kaynak çöktü")
+    broken = run_backtests(daily, build_indicators(five, {**sources, "mvrv": down}), "1d")
+    assert broken["results"]["mvrv"]["available"] is False and broken["results"]["rsi"]["available"] is True
+
+
 def test_indicator_with_no_valid_history_is_marked_unavailable():
     df = synthetic(10, seed=15)  # RSI(14) için yetersiz geçmiş
     report = run_backtests(df, [RSIIndicator()], "1M", keys=("rsi",))
@@ -110,6 +129,7 @@ def test_all():
     test_selected_window_uses_prior_grade_to_avoid_fake_buy_at_start()
     test_signals_use_indicator_points_and_overall_buy_side()
     test_real_rsi_backtest_and_overall_match_when_rsi_is_the_only_indicator()
+    test_backtest_covers_all_five_indicators_and_the_overall_score()
     test_indicator_with_no_valid_history_is_marked_unavailable()
     test_signal_can_reenter_only_after_a_fresh_buy_transition()
 

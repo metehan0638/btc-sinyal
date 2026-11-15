@@ -50,19 +50,19 @@ def overall_score(labels: Mapping[str, str | None]) -> dict:
     return dict(score=score, label=final_label(score), active=len(points), total=len(labels), points=points)
 
 
-def evaluate(df: pd.DataFrame, indicators: list[Indicator]) -> dict:
+def evaluate(df: pd.DataFrame, indicators: list[Indicator], tf: str | None = None) -> dict:
     """Son kapanmış mum için tüm göstergeleri ve genel skoru hesaplar."""
-    values = {ind.key: ind.compute(df).iloc[-1] for ind in indicators}
+    values = {ind.key: ind.compute(df, tf).iloc[-1] for ind in indicators}
     labels = {ind.key: ind.classify(values[ind.key]) for ind in indicators}
     return dict(date=df.index[-1], close=float(df["close"].iloc[-1]), values=values, labels=labels,
                 names={ind.key: ind.name for ind in indicators}, **overall_score(labels))
 
 
-def score_history(df: pd.DataFrame, indicators: list[Indicator]) -> pd.DataFrame:
+def score_history(df: pd.DataFrame, indicators: list[Indicator], tf: str | None = None) -> pd.DataFrame:
     """Her mum için gösterge puanları, genel skor ve nihai etiket. Bir mumun skoru yalnızca o muma kadarki veriyi kullanır.
 
     Sütunlar: her gösterge anahtarı (puan; veri yoksa NaN), 'score', 'active' (aktif gösterge sayısı), 'label' (nihai etiket)."""
-    points = pd.DataFrame({ind.key: ind.labels(ind.compute(df)).map(POINTS.get).astype(float) for ind in indicators},
+    points = pd.DataFrame({ind.key: ind.labels(ind.compute(df, tf)).map(POINTS.get).astype(float) for ind in indicators},
                           index=df.index)
     active = points.notna().sum(axis=1)
     # puanlar tam sayı olduğu için toplam ve bölme tam hesaplanır (sınır değerlerde yuvarlama hatası yok)

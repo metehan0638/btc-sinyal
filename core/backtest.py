@@ -146,7 +146,7 @@ def run_backtests(df: pd.DataFrame, indicators: list[Indicator], tf: str, keys: 
     """
     if tf not in PERIODS_PER_YEAR:
         raise ValueError(f"Desteklenmeyen zaman dilimi: {tf}")
-    history = score_history(df, indicators) if history is None else history
+    history = score_history(df, indicators, tf) if history is None else history
     if not df.index.equals(history.index):
         raise ValueError("Mum ve skor geçmişi serilerinin indeksleri aynı olmalı.")
     grades_all = signals_for_backtest(history)
