@@ -18,10 +18,6 @@
       "cat:Memecoin": 1,
       "coin:DOGE": 1
     },
-    "2026-11-05": {
-      "_total": 7,
-      "coin:BTC": 4
-    },
     "2026-11-07": {
       "_total": 16,
       "cat:ETF / Kurumsal": 3,
@@ -106,13 +102,27 @@
       "coin:BTC": 2
     },
     "2026-11-14": {
-      "_total": 11,
-      "cat:ETF / Kurumsal": 2,
-      "coin:BTC": 8,
+      "_total": 19,
+      "cat:ETF / Kurumsal": 3,
+      "coin:BTC": 9,
       "coin:SHIB": 1,
       "coin:HYPE": 1,
       "cat:Stablecoin / \u00d6deme": 1,
       "coin:DOT": 1,
+      "coin:ETH": 2,
+      "coin:XRP": 1,
+      "coin:AVAX": 1,
+      "coin:SOL": 1,
+      "coin:ADA": 1,
+      "cat:Borsa / Platform": 1
+    },
+    "2026-11-15": {
+      "_total": 9,
+      "coin:BTC": 5,
+      "cat:Borsa / Platform": 1,
+      "coin:ZEC": 1,
+      "coin:XRP": 1,
+      "cat:NFT / Oyun": 1,
       "coin:ETH": 1
     }
   }

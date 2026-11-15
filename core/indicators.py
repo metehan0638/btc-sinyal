@@ -235,11 +235,14 @@ class ExternalDailyIndicator(Indicator):
 class FearGreedIndicator(ExternalDailyIndicator):
     """Crypto Fear & Greed Index (0–100, alternative.me): yatırımcı psikolojisi. Düşük = korku, yüksek = açgözlülük.
 
-    0–10 Güçlü Dip · 11–34 Dip · 35–65 Nötr · 66–89 Şişmiş · 90–100 Aşırı Şişmiş. Haftalık/aylık ortalama tam sayı olmayabileceği için
-    sınırlar sürekli uygulanır: ≤ 10 Güçlü Dip · 10–35 (35 hariç) Dip · 35–65 (65 dahil) Nötr · 65–90 (90 hariç) Şişmiş · ≥ 90 Aşırı Şişmiş;
-    tam sayı değerlerde bu tablo ile birebir aynıdır."""
+    0–20 Güçlü Dip · 21–34 Dip · 35–69 Nötr · 70–79 Şişmiş · 80–100 Aşırı Şişmiş.
+
+    Endeks tam sayıdır; haftalık/aylık ortalama ise tam sayı olmayabilir. Ara değerler en yakın tam sayıya yuvarlanıp (x,5 yukarı) tabloya
+    uygulanır: < 20,5 Güçlü Dip · < 34,5 Dip · < 69,5 Nötr · < 79,5 Şişmiş · aksi halde Aşırı Şişmiş. Tam sayı değerlerde tablo ile birebir aynıdır."""
     key, name, source_key = "fear_greed", "Fear & Greed", "fear_greed"
     value_range = (0, 100)
+    # tablonun alt sınırlarının (21, 35, 70, 80) bir önceki tam sayıyla orta noktası: yuvarlama sınırları
+    cutoffs = (20.5, 34.5, 69.5, 79.5)
 
     def daily(self) -> pd.Series:
         return self.source()
@@ -247,18 +250,19 @@ class FearGreedIndicator(ExternalDailyIndicator):
     def classify(self, value: float) -> str | None:
         if value is None or pd.isna(value):
             return None
-        if value <= 10:
+        c1, c2, c3, c4 = self.cutoffs
+        if value < c1:
             return STRONG_BOTTOM
-        if value < 35:
+        if value < c2:
             return BOTTOM
-        if value <= 65:
+        if value < c3:
             return NEUTRAL
-        if value < 90:
+        if value < c4:
             return OVERHEATED
         return EXTREME
 
     def levels(self) -> list[tuple[float, str]]:
-        return [(10, "10"), (35, "35"), (65, "65"), (90, "90")]
+        return [(20.5, "20/21"), (34.5, "34/35"), (69.5, "69/70"), (79.5, "79/80")]
 
     def text(self, value: float) -> str:
         return f"{value:.0f}" if abs(value - round(value)) < 1e-9 else f"{value:.1f}"

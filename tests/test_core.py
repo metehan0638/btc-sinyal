@@ -268,20 +268,22 @@ def test_mfi_labels_follow_the_rule_table_exactly():
 
 def test_fear_greed_labels_match_the_table_for_every_integer():
     fg = FearGreedIndicator()
-    table = [(range(0, 11), STRONG_BOTTOM), (range(11, 35), BOTTOM), (range(35, 66), NEUTRAL), (range(66, 90), OVERHEATED),
-             (range(90, 101), EXTREME)]
+    table = [(range(0, 21), STRONG_BOTTOM), (range(21, 35), BOTTOM), (range(35, 70), NEUTRAL), (range(70, 80), OVERHEATED),
+             (range(80, 101), EXTREME)]
     seen = set()
     for values, label in table:
         for value in values:
             assert fg.classify(float(value)) == label, (value, fg.classify(float(value)), label)
             seen.add(value)
     assert seen == set(range(0, 101)), "tablo 0-100'ün tamamını kapsamalı"
-    # haftalık/aylık ortalamalar tam sayı olmayabilir: sınırlar sürekli uygulanır
-    for value, label in ((10.0, STRONG_BOTTOM), (10.4, BOTTOM), (34.6, BOTTOM), (35.0, NEUTRAL), (65.0, NEUTRAL), (65.4, OVERHEATED),
-                         (89.6, OVERHEATED), (90.0, EXTREME)):
+    # haftalık/aylık ortalamalar tam sayı olmayabilir: en yakın tam sayıya yuvarlanıp (x,5 yukarı) tabloya uygulanır
+    for value, label in ((20.4, STRONG_BOTTOM), (20.5, BOTTOM), (20.9, BOTTOM), (34.4, BOTTOM), (34.5, NEUTRAL), (69.4, NEUTRAL),
+                         (69.5, OVERHEATED), (79.4, OVERHEATED), (79.5, EXTREME), (99.9, EXTREME), (0.2, STRONG_BOTTOM)):
         assert fg.classify(value) == label, (value, fg.classify(value), label)
+        assert fg.classify(value) == fg.classify(float(int(value + 0.5))), "ara değer, yuvarlanmış tam sayıyla aynı etiketi almalı"
     assert fg.classify(float("nan")) is None and fg.classify(None) is None
     assert fg.key == "fear_greed" and fg.name == "Fear & Greed" and fg.text(34.0) == "34" and fg.text(34.5) == "34.5"
+    assert [v for v, _ in fg.levels()] == [20.5, 34.5, 69.5, 79.5]
 
 
 def test_mvrv_labels_follow_the_rule_table_exactly():

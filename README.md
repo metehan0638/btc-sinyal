@@ -95,14 +95,14 @@ Kripto piyasasındaki yatırımcı psikolojisini 0–100 arasında ölçer (dü�
 
 | Fear & Greed | Etiket |
 |---|---|
-| 0–10 | Güçlü Dip |
-| 11–34 | Dip |
-| 35–65 | Nötr |
-| 66–89 | Şişmiş |
-| 90–100 | Aşırı Şişmiş |
+| 0–20 | Güçlü Dip |
+| 21–34 | Dip |
+| 35–69 | Nötr |
+| 70–79 | Şişmiş |
+| 80–100 | Aşırı Şişmiş |
 
 Endeks **günlüktür**: günlük mumda o günün değeri, **haftalık mumda o haftanın 7 günlük ortalaması, aylık mumda o ayın günlük ortalaması** kullanılır.
-Ortalama tam sayı olmayabileceği için sınırlar sürekli uygulanır (≤ 10 Güçlü Dip, 10–35 Dip, 35–65 Nötr, 65–90 Şişmiş, ≥ 90 Aşırı Şişmiş); tam sayı değerlerde yukarıdaki tabloyla birebir aynıdır.
+Ortalama tam sayı olmayabileceği için ara değerler en yakın tam sayıya yuvarlanıp (x,5 yukarı) tabloya uygulanır (< 20,5 Güçlü Dip, < 34,5 Dip, < 69,5 Nötr, < 79,5 Şişmiş, aksi halde Aşırı Şişmiş); tam sayı değerlerde yukarıdaki tabloyla birebir aynıdır.
 Haftanın veya ayın bir günü bile eksikse o mum için değer üretilmez (yarım veriden ortalama alınmaz).
 
 ### 5. MVRV Z-Score (yalnızca Bitcoin)

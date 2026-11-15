@@ -19,7 +19,7 @@ assets:                                  # sistemde yalnızca Bitcoin var (MVRV 
 #   rsi:        Wilder RSI. < 30 Güçlü Dip · 30-35 Dip · 35-65 Nötr · 65-70 Şişmiş · > 70 Aşırı Şişmiş
 #   bollinger:  Bollinger %B (0 alt bant, 0.5 orta bant, 1 üst bant). < 0 Güçlü Dip · 0-0.10 Dip · 0.10-0.90 Nötr · 0.90-1 Şişmiş · > 1 Aşırı Şişmiş
 #   mfi:        Money Flow Index (hacimli RSI benzeri). < 20 Güçlü Dip · 20-30 Dip · 30-70 Nötr · 70-80 Şişmiş · > 80 Aşırı Şişmiş
-#   fear_greed: Fear & Greed endeksi (alternative.me, günlük). 0-10 Güçlü Dip · 11-34 Dip · 35-65 Nötr · 66-89 Şişmiş · 90-100 Aşırı Şişmiş
+#   fear_greed: Fear & Greed endeksi (alternative.me, günlük). 0-20 Güçlü Dip · 21-34 Dip · 35-69 Nötr · 70-79 Şişmiş · 80-100 Aşırı Şişmiş
 #   mvrv:       MVRV Z-Score (Coin Metrics, yalnızca Bitcoin, günlük). < 0 Güçlü Dip · 0-1 Dip · 1-3 Nötr · 3-7 Şişmiş · >= 7 Aşırı Şişmiş
 # fear_greed ve mvrv günlük veridir: günlük mumda o günün değeri, haftalık/aylık mumda dönemin günlük ortalaması kullanılır
 # (aggregate: mean). aggregate: last yazarsan dönemin son günü alınır. Dönemin bir günü bile eksikse o mum için değer üretilmez.
