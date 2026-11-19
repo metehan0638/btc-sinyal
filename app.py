@@ -11,6 +11,7 @@ import yaml
 from plotly.subplots import make_subplots
 
 from core.data import get_candles
+from core import rsi_scan
 from core.backtest import OVERALL_KEY, run_backtests
 from core.indicators import BAR_NAME, ICONS, MIN_BARS, POINTS, build_indicators, clear_sources, default_sources
 from core.scoring import HORIZONS, MILD_FROM, STRONG_FROM, bucket_table, evaluate, score_history
@@ -143,8 +144,8 @@ for tf_, (df_, *_rest) in data.items():
 # ---------------- zaman dilimi seçimi ----------------
 tf = st.radio("Zaman dilimi", list(TF_LABEL), format_func=TF_LABEL.get, horizontal=True)
 df, history, result = data[tf]
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Güncel durum", "📈 Grafik", "🔥 Haber / Hype", "📉 Geçmiş performans",
-                                         "🎯 Skor geçmişi"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Güncel durum", "📈 Grafik", "🔥 Haber / Hype", "📉 Geçmiş performans",
+                                               "🎯 Skor geçmişi", "🔔 Haftalık RSI Alarmı"])
 
 # ---------------- sekme 1: güncel durum ----------------
 with tab1:
@@ -406,3 +407,106 @@ with tab5:
             "bir etiketin sonuçları çoğu zaman bir iki döngüye aittir. (3) Getiriler kapanıştan kapanışa, komisyonsuzdur ve al-tut "
             "getirisiyle (kıyas satırı) karşılaştırılmalıdır. (4) Geçmişte işleyen bir etiket gelecekte de işleyecek demek değildir. "
             "(5) İstatistikler seçili zaman diliminin tüm geçmişinden hesaplanır; grafik aralığı yalnızca görünümü değiştirir.")
+
+
+# ---------------- sekme 6: Haftalık RSI Alarmı ----------------
+try:
+    SCAN_SETTINGS, SCAN_CONFIG_ERROR = rsi_scan.scan_settings(CFG), None
+except ValueError as e:  # config.yaml'daki rsi_scan bölümü hatalıysa yalnızca bu sekme devre dışı kalır
+    SCAN_SETTINGS, SCAN_CONFIG_ERROR = None, str(e)
+
+
+@st.cache_resource(show_spinner=False)
+def get_scan_scheduler():
+    """Sunucu başına TEK zamanlayıcı: arka plan iş parçacığı günlük otomatik taramayı yapar; uygulama yeniden başlayınca yeniden kurulur."""
+    scheduler = rsi_scan.ScanScheduler(SCAN_SETTINGS)
+    scheduler.start()
+    return scheduler
+
+
+def _live(function):
+    """Tarama sürerken ve bittiğinde bölümün kendiliğinden güncellenmesi için 3 saniyede bir yenilenen parça (eski Streamlit'te yenile düğmesi)."""
+    fragment = getattr(st, "fragment", None)
+    return fragment(run_every=3)(function) if fragment else function
+
+
+def _ist_text(iso_text):
+    return datetime.fromisoformat(iso_text).astimezone(rsi_scan.IST).strftime("%d.%m.%Y %H:%M")
+
+
+@_live
+def rsi_alarm_panel():
+    scheduler = get_scan_scheduler()
+    state = scheduler.state()
+    enabled, at_time = rsi_scan.effective_settings(state, scheduler.settings)
+
+    st.caption("Takip listesindeki coinlerin **kapanmış haftalık mumlarından Wilder RSI(14)** hesaplanır. Yalnızca **RSI < 28** olan coinler "
+               "gösterilir ve Telegram'a bildirilir; RSI 28 veya üzerindeki hiçbir coin listelenmez. Zamanlayıcı bu uygulama (Streamlit sunucusu) "
+               "çalıştığı sürece aktiftir.")
+    c1, c2, c3 = st.columns(3)
+    new_enabled = c1.toggle("Otomatik tarama aktif", value=enabled, key="rsi_auto_enabled")
+    new_time = c2.time_input("Günlük tarama saati (Türkiye saati)", value=at_time, key="rsi_schedule_time", step=300)
+    if new_enabled != enabled:
+        scheduler.set_enabled(new_enabled)
+    if f"{new_time:%H:%M}" != f"{at_time:%H:%M}":
+        scheduler.set_time(f"{new_time:%H:%M}")
+    upcoming = scheduler.next_scan()
+    c3.metric("Bir sonraki otomatik tarama",
+              {"disabled": "Pasif", "due": "Sırada (birazdan)"}.get(upcoming["kind"]) or f"{upcoming['at']:%d.%m.%Y %H:%M}")
+    st.write(f"Otomatik tarama: **{'aktif' if new_enabled else 'pasif'}** · Saat: **{new_time:%H:%M}** (Türkiye) · "
+             f"Takip edilen coin: **{len(scheduler.settings['symbols'])}**")
+
+    running = scheduler.running
+    if running:
+        done, total = scheduler.progress
+        st.progress(done / total if total else 0.0, text=f"{'Otomatik' if running == 'auto' else 'Manuel'} tarama sürüyor: {done} / {total} coin")
+
+    b1, b2, b3 = st.columns([1, 2, 2])
+    send_too = b2.checkbox("Manuel taramanın sonucunu Telegram'a da gönder", value=False, key="rsi_manual_send")
+    if b1.button("🔍 Şimdi tara", disabled=bool(running), key="rsi_manual_scan"):
+        if scheduler.start_manual(send_telegram=send_too):
+            st.toast("Tarama arka planda başlatıldı.")
+        else:
+            st.warning("Bir tarama zaten sürüyor.")
+    if b3.button("📨 Telegram test mesajı gönder", key="rsi_test_telegram"):
+        try:
+            rsi_scan.send_test_message()
+            st.success("Test mesajı gönderildi. Telegram'ı kontrol et.")
+        except Exception as e:  # noqa: BLE001
+            st.error(f"Test mesajı gönderilemedi: {e}")
+
+    last = state.get("last_scan")
+    if not last:
+        st.info("Henüz tarama yapılmadı. Bir sonraki otomatik taramayı bekleyebilir veya **Şimdi tara** düğmesine basabilirsin.")
+    else:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Son tarama", _ist_text(last["at"]))
+        m2.metric("Taranan coin", f"{last['scanned']} / {last['total']}")
+        m3.metric("RSI < 28 bulunan", len(last["alerts"]))
+        m4.metric("Tür · Telegram", f"{'Otomatik' if last['kind'] == 'auto' else 'Manuel'} · "
+                  f"{ {'sent': 'gönderildi', 'skipped': 'gönderilmedi', 'failed': 'HATA'}.get(last['telegram'], last['telegram']) }")
+        alerts = sorted((a for a in last["alerts"] if a["rsi"] < rsi_scan.THRESHOLD), key=lambda a: a["rsi"])  # 28 ve üzeri asla gösterilmez
+        if alerts:
+            table = pd.DataFrame({"Coin": [a["symbol"] for a in alerts],
+                                  "Haftalık RSI(14)": [rsi_scan.display_rsi(a["rsi"]) for a in alerts],
+                                  "Son kapanış (USDT)": [f"{a['close']:,.8g}" for a in alerts],
+                                  "Mum (hafta başı)": [a["week"] for a in alerts]})
+            st.dataframe(table, hide_index=True, width="stretch", alt="Haftalık RSI değeri 28'in altındaki coinler")
+        else:
+            st.success("Haftalık RSI değeri 28'in altında olan coin bulunamadı.")
+        if last["failed"]:
+            with st.expander(f"Verisi alınamayan {last['failed']} coin (RSI hesaplanamadı, taramaya dahil edilmedi)"):
+                for item in last["failed_symbols"]:
+                    st.write(f"• {item}")
+        if last.get("telegram_error"):
+            st.error(f"Telegram gönderimi başarısız: {last['telegram_error']}")
+    if state.get("last_error") and not (last and last.get("telegram_error")):
+        st.warning(f"Son hata: {state['last_error']}")
+
+
+with tab6:
+    st.subheader("Haftalık RSI Alarmı")
+    if SCAN_SETTINGS is None:
+        st.error(f"config.yaml içindeki `rsi_scan` bölümü geçersiz: {SCAN_CONFIG_ERROR}")
+    else:
+        rsi_alarm_panel()

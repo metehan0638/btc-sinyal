@@ -172,6 +172,63 @@ Skor geçmişi tablosu tahmin değil, geçmişin tarifidir: bitişik mumların i
 > **Sınırlar:** Aşırı satım, dipte olunduğunu garanti etmez; düşüş trendinde göstergeler uzun süre Dip tarafında kalabilir, güçlü yükselişte uzun süre Şişmiş tarafında kalabilir.
 > Skor dip/tepe tahmini değil, göstergelerin aşırılık durumunun özetidir.
 
+## Haftalık RSI alarmı (50 coin)
+
+Bitcoin Dip Skorundan **bağımsız** ayrı bir özelliktir: `config.yaml` içindeki `rsi_scan.coins` listesindeki (varsayılan 50 coin) coinlerin
+**kapanmış haftalık mumlarından Wilder RSI(14)** hesaplanır ve yalnızca **RSI < 28** olan coinler Telegram'a bildirilir.
+RSI 28.00 veya üzerindeki hiçbir coin mesajda, panel tablosunda veya durum dosyasındaki alarm listesinde yer almaz.
+Karar kuralı koda sabitlenmiştir (`core/rsi_scan.py`: `THRESHOLD = 28.0`, koşul kesinlikle `rsi < 28`); günlük/4 saatlik RSI kullanılmaz.
+
+**Telegram mesajı** (RSI'a göre küçükten büyüğe; gerçek veriyle):
+
+```
+🔔 HAFTALIK RSI TARAMA RAPORU
+
+📅 Tarama Tarihi: 17.11.2026
+
+🚨 Haftalık RSI 28'in Altındaki Coinler:
+
+1. SOL/USDT — RSI: 21.75
+2. BTC/USDT — RSI: 24.63
+
+📊 Toplam Tespit: 2 / 50
+```
+
+Hiçbir coin 28'in altında değilse `✅ Haftalık RSI değeri 28'in altında olan coin bulunamadı.` ve `📊 Taranan Coin: 50` gönderilir.
+Bazı coinlerin verisi alınamazsa tarama durmaz: o coinler taramaya dahil edilmez, adları mesajda yer almaz ve mesajın sonuna yalnızca
+`⚠️ Verisi alınamayan coin: N` satırı eklenir (ayrıntı panelde ve terminalde). Hiçbir coinin verisi alınamazsa "coin bulunamadı" denmez, tarama hata sayılır.
+Mesajdaki RSI değeri normal yuvarlanır; yalnızca 28'in altındaki bir değer yuvarlanınca 28.00 olacaksa 27.99 yazılır.
+
+**Veri kuralları:** yalnızca kapanmış haftalık mumlar kullanılır (içinde bulunulan haftanın mumu RSI'a dahil edilmez); tarihler sıralanır, tekrarlar atılır,
+eksik haftası veya bozuk fiyatı olan veri kısaltılır. En az **100 kapanmış haftalık mum** şarttır, daha kısa geçmişli coin "veri yetersiz" sayılıp taramadan çıkar.
+Bu sınır ölçülerek seçildi: Wilder RSI başlangıç tohumundan etkilendiği için 52 haftalık geçmişle eşik civarında RSI %95 olasılıkla 1,7 puan sapar,
+75 haftada 0,4 puan, **100 haftada 0,06 puan**, 150 haftada ~0 puan. Bu yüzden 200 hafta çekilir. RSI projedeki `wilder_rsi` fonksiyonuyla hesaplanır
+(Bitcoin göstergeleriyle aynı yöntem; TradingView ile aynı). Geçici ağ/hız sınırı hatalarında coin başına bir kez yeniden denenir, coinler arasında kısa bekleme vardır.
+
+### Nasıl çalıştırılır (birini seç, ikisini birden kullanma)
+
+1. **Streamlit paneli açıkken uygulama içi zamanlayıcı (varsayılan):** `streamlit run app.py` ile paneli aç; **🔔 Haftalık RSI Alarmı** sekmesi arka plan zamanlayıcısını çalıştırır.
+   Her gün Türkiye saatiyle `rsi_scan.time` (varsayılan **09:00**) saatinde bir kez tarar. Uygulama yeniden başlayınca zamanlama yeniden kurulur; bugünkü saat geçmiş ve bugün otomatik
+   tarama yapılmamışsa hemen çalışır. Aynı gün ikinci otomatik tarama yapılmaz (durum `rsi_scan_state.json` dosyasında tutulur). Telegram gönderimi başarısız olursa gün "yapıldı"
+   sayılmaz; 15 dakika arayla günde en çok 3 kez denenir. Yalnızca uygulama (Streamlit sunucusu) çalıştığı sürece tarar.
+2. **Komut satırı:** `python scan_rsi.py` (bugün otomatik tarama yapılmadıysa tarar ve gönderir; saat kontrolü yapmaz, zamanı Windows Görev Zamanlayıcı/cron belirler).
+   `--force` hemen tarar ve gönderir, `--dry-run` mesajı ekrana yazar (göndermez, kaydetmez), `--test-telegram` bağlantı testi gönderir.
+3. **GitHub Actions:** `.github/workflows/rsi-scan.yml` (varsayılan olarak yalnızca elle çalışır; günlük çalışma için dosyadaki `schedule` satırlarını aç).
+
+Aynı anda yalnızca bir tarama çalışır (`rsi_scan.lock` kilit dosyası). Aynı makinede çift mesajı bu kilit ve durum dosyası önler; farklı makinelerde (örn. yerel panel + GitHub Actions) önleyemez.
+
+### Panel bölümü
+
+Panel sekmesi şunları gösterir: otomatik taramanın aktif/pasif durumu (açıp kapatabilirsin), tarama saati (değiştirebilirsin), bir sonraki tarama zamanı, son taramanın tarihi/saati,
+taranan coin sayısı, **yalnızca RSI < 28 olan coinler ve RSI değerleri** tablosu, **Şimdi tara** düğmesi (arka planda çalışır, arayüzü kilitlemez; ilerleme çubuğu gösterilir;
+sonucu Telegram'a göndermek için kutu işaretlenir) ve **Telegram test mesajı gönder** düğmesi. Sonuçlar tarama bitince kendiliğinden güncellenir.
+
+### Ayarlar (`config.yaml` → `rsi_scan`)
+
+`enabled`, `time` (SS:DD, Türkiye saati), `period`, `min_weeks`, `fetch_weeks`, `retries`, `retry_delay`, `request_pause` ve `coins` (kısaltma listesi, örn. `BTC` veya `BTC/USDT`).
+**Varsayılan 50 coin listesi benim tahminimdir** (Binance'te uzun süredir USDT paritesi olan büyük coinler); kendi listeni yaz. Pariteye ulaşılamayan coin atlanır ve "verisi alınamayan" sayılır.
+Telegram için `.env` dosyasına `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_CHAT_ID` yazılır (aşağıdaki Kurulum bölümü).
+
 ## Kurulum
 
 ```
@@ -186,6 +243,7 @@ Chat ID'ni bulmak için: botuna Telegram'dan bir mesaj at, sonra `python check_s
 ```
 python check_signals.py --report --dry-run   # raporu ekrana yazar, göndermez
 python check_signals.py --report             # raporu hemen Telegram'a gönderir
+python scan_rsi.py --dry-run                 # haftalık RSI taramasını yapar, mesajı ekrana yazar (göndermez)
 python check_signals.py                      # günde bir rapor (zamanlanmış çalışma bunu kullanır)
 streamlit run app.py                         # panel
 ```
@@ -206,6 +264,7 @@ python tests/test_mvrv.py        # MVRV Z-Score hesabı ve Coin Metrics veri çe
 python tests/test_scoring.py     # genel skor, nihai etiket, skor geçmişi
 python tests/test_backtest.py
 python tests/test_check.py       # rapor ve durum akışı
+python tests/test_rsi_scan.py    # haftalık RSI alarmı: eşik, mesaj, veri bütünlüğü, zamanlayıcı, kilit, komut satırı
 python tests/test_news.py
 python tests/test_sentiment.py
 ```
@@ -223,4 +282,5 @@ Hiçbiri internet veya Telegram gerektirmez.
 - `core/sentiment.py`: Fear & Greed endeksi verisi (alternative.me)
 - `core/news.py`: RSS haberlerini UI'da sınıflandırma ve hype analizi
 - `core/notifier.py`: Telegram
+- `core/rsi_scan.py`: haftalık RSI alarmı (tarama, mesaj, durum, kilit, zamanlayıcı) · `scan_rsi.py`: komut satırı
 - `check_signals.py`: rapor ve Telegram akışı · `app.py`: Streamlit paneli

@@ -40,3 +40,23 @@ indicators:
 
 fear_greed_info: true                    # rapor sonunda ve panelde Fear & Greed değerini ayrıca göster (skor için fear_greed göstergesi gerekir)
 daily_report: true                       # günde bir Telegram raporu
+
+# HAFTALIK RSI ALARMI (Bitcoin Dip Skoru'ndan bağımsız ayrı özellik)
+# Listedeki coinlerin kapanmış haftalık mumlarından Wilder RSI(14) hesaplanır; yalnızca RSI < 28 olanlar Telegram'a bildirilir (28 ve üzeri asla).
+# Çalıştırma: Streamlit paneli açıkken uygulama içi zamanlayıcı (aşağıdaki saat) VEYA python scan_rsi.py. İkisini birden kullanma (çift mesaj).
+rsi_scan:
+  enabled: true            # uygulama içi otomatik tarama (panelden de açılıp kapatılabilir)
+  time: "09:00"            # günlük tarama saati, Türkiye saati (panelden de değiştirilebilir)
+  period: 14               # RSI periyodu (Wilder)
+  min_weeks: 100           # en az bu kadar kapanmış haftalık mum (daha kısa geçmişli coin "veri yetersiz" sayılıp taramadan çıkar)
+  fetch_weeks: 200         # RSI'ın doğruluğu için çekilecek geçmiş (hafta)
+  retries: 1               # geçici hatada (ağ, hız sınırı) coin başına yeniden deneme
+  retry_delay: 3           # yeniden denemeden önce bekleme (sn, her denemede artar)
+  request_pause: 0.25      # coinler arası bekleme (sn): hız sınırı koruması
+  # Takip edilecek coinler: USDT paritesi olan kısaltmalar ('BTC' veya 'BTC/USDT'). Aşağıdaki liste bir varsayımdır, kendi 50 coinini yaz.
+  # Pariteye ulaşılamayan coin atlanır ve "verisi alınamayan" olarak sayılır.
+  coins: [BTC, ETH, BNB, XRP, SOL, TRX, DOGE, ADA, LINK, AVAX,
+          XLM, BCH, LTC, SUI, HBAR, DOT, TON, SHIB, UNI, AAVE,
+          NEAR, ETC, APT, ICP, ARB, OP, FIL, ATOM, ALGO, VET,
+          INJ, POL, RENDER, SEI, FET, STX, PEPE, CRV, GRT, IMX,
+          SAND, MANA, THETA, EGLD, FLOW, XTZ, RUNE, LDO, GALA, CHZ]

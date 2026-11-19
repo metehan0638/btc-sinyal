@@ -1,0 +1,49 @@
+name: Haftalık RSI taraması
+
+# DİKKAT: Streamlit panelindeki uygulama içi zamanlayıcıyı VEYA bu iş akışını kullan, ikisini birden değil (aynı gün iki Telegram mesajı gelebilir).
+# Varsayılan olarak yalnızca elle çalıştırılır. Günlük otomatik çalışma için aşağıdaki schedule satırlarının başındaki # işaretlerini kaldır.
+# GitHub cron saati UTC'dir: 06:00 UTC = 09:00 Türkiye saati (GitHub çalıştırmayı birkaç dakika geciktirebilir).
+on:
+  # schedule:
+  #   - cron: "0 06 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Bugün tarama yapılmış olsa da zorla çalıştır"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rsi-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Kütüphaneleri kur
+        run: pip install ccxt pandas numpy pyyaml
+
+      - name: Haftalık RSI taraması
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BINANCE_PUBLIC_URL: https://data-api.binance.vision/api/v3
+        run: python scan_rsi.py ${{ inputs.force && '--force' || '' }}
+
+      - name: Durumu repoya kaydet
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -f rsi_scan_state.json ]; then git add rsi_scan_state.json; fi
+          git diff --cached --quiet || (git commit -m "RSI tarama durumu güncellendi" && git pull --rebase && git push)

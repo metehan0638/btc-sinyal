@@ -1,0 +1,7 @@
+.env
+cache/
+logs/
+__pycache__/
+.venv/
+rsi_scan.lock
+rsi_scan_state.json.tmp
