@@ -4,8 +4,8 @@ name: Haftalık RSI taraması
 # Varsayılan olarak yalnızca elle çalıştırılır. Günlük otomatik çalışma için aşağıdaki schedule satırlarının başındaki # işaretlerini kaldır.
 # GitHub cron saati UTC'dir: 06:00 UTC = 09:00 Türkiye saati (GitHub çalıştırmayı birkaç dakika geciktirebilir).
 on:
-  # schedule:
-  #   - cron: "0 06 * * *"
+   schedule:
+     - cron: "0 06 * * *"
   workflow_dispatch:
     inputs:
       force:
