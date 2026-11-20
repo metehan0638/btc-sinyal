@@ -6,7 +6,7 @@ name: Haftalık RSI taraması
 on:
    schedule:
      - cron: "30 08 * * *"
-  workflow_dispatch:
+   workflow_dispatch:
     inputs:
       force:
         description: "Bugün tarama yapılmış olsa da zorla çalıştır"
