@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pandas as pd
 
-TF_MS = {"1d": 86_400_000, "1w": 7 * 86_400_000}
+TF_MS = {"1h": 3_600_000, "2h": 2 * 3_600_000, "4h": 4 * 3_600_000, "6h": 6 * 3_600_000, "12h": 12 * 3_600_000,
+         "1d": 86_400_000, "1w": 7 * 86_400_000}  # saatlik periyotlar grafik yorumu (4h) içindir
 CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
 COLS = ["time", "open", "high", "low", "close", "volume"]
 

@@ -1,5 +1,6 @@
 """check_signals mantığını sentetik veriyle test eder (internet/Telegram gerekmez)."""
-import json, re, sys, tempfile
+import contextlib, io, json, re, sys, tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -9,16 +10,23 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_core import make_fg, make_mvrv_frame, synthetic
+from test_chart_analysis import formation_df
 import check_signals as cs
 
 cfg = yaml.safe_load(open(Path(__file__).resolve().parent.parent / "config.yaml", encoding="utf-8"))
 real_indicators = cfg["indicators"]
 assert [a["ticker"] for a in cs.configured_assets(cfg)] == ["BTC"], "sistemde yalnızca Bitcoin olmalı"
+real_chart_comment = cfg["chart_comment"]
+assert real_chart_comment["enabled"] is True and real_chart_comment["timeframes"] == ["4h", "1d"], "config.yaml: grafik yorumu açık, 4h ve 1d"
+cfg["chart_comment"] = {"enabled": False}  # eski akış testleri grafik yorumsuz; yorum entegrasyonu bölüm 13'te
 cfg["indicators"] = {"rsi": {"period": 14}}  # aşağıdaki akış testleri yalnızca RSI ile (skorlar 5 değerden biri); beş gösterge bölüm 12'de
 df = synthetic(1800, seed=3)
 fetch_calls = []
+FOUR_HOUR = formation_df([110, 110], [100, 108.5])  # 4 saatlik: yükselen üçgen içeren 400 mum
 def fetch(sym, tf, ex, since):
     fetch_calls.append((sym, tf, since))
+    if tf == "4h":
+        return FOUR_HOUR.copy()
     if tf == "1d":
         return df
     return df.resample("W-MON" if tf == "1w" else "MS", label="left", closed="left").agg(
@@ -171,4 +179,132 @@ assert res_down3["1d"]["score"] == (100 + 50 + 100) / 3
 early = cs.analyze(falling.iloc[:15], "1d", three)
 assert early["labels"]["bollinger"] is None and early["active"] == 2 and early["total"] == 3 and early["score"] == 100
 assert cs._score_lines(early)[0] == "🎯 Dip Skoru: +100 · 🟢🟢 Güçlü Dip (2/3 gösterge)"
+# 13) GRAFİK YORUMU: rapora entegrasyon, hata yalıtımı, uzunluk korumaları, bozuk state.json onarımı
+from core.data import TF_MS, _bar_end_ms
+assert TF_MS["4h"] == 4 * 3_600_000 and _bar_end_ms(1_700_000_000_000, "4h") == 1_700_000_000_000 + 4 * 3_600_000, "4 saatlik mum desteği"
+comment_cfg = {**cfg, "chart_comment": real_chart_comment}
+score_lines = lambda text: re.findall(r"🎯 Dip Skoru: [^\n]+", text)
+
+
+def run_comment(config, fetch_fn=fetch, **kw):
+    with tempfile.TemporaryDirectory() as tmp3:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            messages = cs.run(config, sent.append, state_path=Path(tmp3) / "s.json", fetch=fetch_fn, fetch_fg=lambda: fg, **kw)
+        return messages, out.getvalue()
+
+
+plain, _ = run_comment(cfg)
+assert "Grafik Yorumu" not in plain[0], "kapalıyken yorum olmamalı"
+fetch_calls.clear()
+with_comment, log = run_comment(comment_cfg)
+assert len(with_comment) == 1 and len(with_comment[0]) < 4096
+text = with_comment[0]
+assert text.index("📅 AYLIK") < text.index("📐 Grafik Yorumu") < text.index(cs.LEGEND), "yorum Dip Skoru çubuklarının altında, açıklamanın üstünde"
+assert text.rstrip().splitlines()[-1].startswith(("😱", "😨", "😐", "😏", "🤑")) and "Fear & Greed" in text.rstrip().splitlines()[-1]
+assert "Bitcoin şu an 4 saatlik grafikte" in text and "Bitcoin şu an günlük grafikte" in text
+assert "Yükselen üçgen formasyonu oluşuyor (bullish)" in text, "4 saatlik veri yükselen üçgen içeriyor"
+assert text.count("Teknik analiz kesinlik taşımaz, yatırım tavsiyesi değildir.") == 1
+assert score_lines(text) == score_lines(plain[0]), "yorum Dip Skorunu etkilemez"
+four_hour_calls = [c for c in fetch_calls if c[1] == "4h"]
+assert len(four_hour_calls) == 1 and sum(c[1] == "1d" for c in fetch_calls) == 1, "1d için ek çekim yok (rapor için çekilen geçmiş kullanılır); 4h bir kez"
+since = datetime.strptime(four_hour_calls[0][2], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+assert 95 <= (datetime.now(timezone.utc) - since).days <= 101, "4h için ~600 mum (~100 gün) geriden istenir"
+assert cs.run({**comment_cfg, "chart_comment": {"enabled": False}}, sent.append, dry_run=True, status_only=True, state_path=Path(tempfile.gettempdir()) / "x.json",
+              fetch=fetch, fetch_fg=lambda: fg) and True
+status_msgs, _ = run_comment(comment_cfg, status_only=True)
+assert "📐 Grafik Yorumu" in status_msgs[0], "--report yolunda da yorum var"
+
+# hata yalıtımı: 4h çekimi çökerse yalnızca o paragraf "üretilemedi"; rapor ve skorlar aynı
+def fetch_4h_down(sym, tf, ex, since):
+    if tf == "4h":
+        raise ConnectionError("HTTP 451 erişim engeli")
+    return fetch(sym, tf, ex, since)
+partial, log = run_comment(comment_cfg, fetch_4h_down)
+assert "4 saatlik grafik için yorum üretilemedi (veri alınamadı)." in partial[0] and "Bitcoin şu an günlük grafikte" in partial[0]
+assert score_lines(partial[0]) == score_lines(plain[0]) and "[grafik yorumu] BTC 4h atlandı: ConnectionError" in log
+only_4h = {**comment_cfg, "chart_comment": {**real_chart_comment, "timeframes": ["4h"]}}
+none_ok, _ = run_comment(only_4h, fetch_4h_down)
+assert "📐 Grafik Yorumu\nGrafik yorumu şu an üretilemedi." in none_ok[0] and "Teknik analiz kesinlik" not in none_ok[0]
+assert score_lines(none_ok[0]) == score_lines(plain[0]) and cs.LEGEND in none_ok[0], "tüm yorumlar başarısız olsa da rapor eksiksiz gider"
+short, log = run_comment(comment_cfg, lambda sym, tf, ex, since: FOUR_HOUR.iloc[:100] if tf == "4h" else fetch(sym, tf, ex, since))
+assert "4 saatlik grafik için yorum üretilemedi (yeterli mum yok (100 < 250))." in short[0]
+original_analyze = cs.chart_analysis.analyze
+def crashing_analyze(*a, **k): raise RuntimeError("beklenmeyen hata")
+cs.chart_analysis.analyze = crashing_analyze
+try:
+    crashed, log = run_comment(comment_cfg)
+finally:
+    cs.chart_analysis.analyze = original_analyze
+assert "📐 Grafik Yorumu\nGrafik yorumu şu an üretilemedi." in crashed[0] and cs.LEGEND in crashed[0], "tüm periyotlar çökerse tek satır"
+assert score_lines(crashed[0]) == score_lines(plain[0]) and log.count("RuntimeError") == 2, "hata her periyot için loglanır, rapor eksiksiz gider"
+for bad in ({**real_chart_comment, "timeframes": ["7m"]}, {**real_chart_comment, "params": {"sr_tolerans": 1}},
+            {**real_chart_comment, "timeframe_params": {"4h": {"yok": 1}}}, {**real_chart_comment, "ayar": 1}):
+    broken_cfg, log = run_comment({**cfg, "chart_comment": bad})
+    assert "Grafik Yorumu" not in broken_cfg[0] and score_lines(broken_cfg[0]) == score_lines(plain[0]) and "ayar hatası" in log, bad
+tuned, _ = run_comment({**cfg, "chart_comment": {**real_chart_comment, "timeframe_params": {"4h": {"pattern_min_score": 1.0}}}})
+assert "Yükselen üçgen" not in tuned[0] and "Belirgin bir formasyon tespit edilmedi" in tuned[0], "config'ten eşik değişikliği uygulanır"
+
+# mesaj uzunluğu: önce kısa yorum, sonra yorumsuz, hâlâ sığmazsa eski davranış (hata)
+assets = cs.configured_assets(cfg)
+analysis = {tf: cs.analyze(fetch("BTC/USDT", tf, None, None), tf, cfg, sources) for tf in cs.TF_UP}
+comments = cs.build_chart_comments(comment_cfg, assets, {"BTC": analysis}, fetch)
+bare, full, compact = (len(cs.report_messages({"BTC": analysis}, assets, comments=c)[0]) for c in (None, comments, {"BTC": comments["BTC"][1:]}))
+assert bare < compact < full
+original_limit = cs.MAX_REPORT_CHARS
+try:
+    cs.MAX_REPORT_CHARS = (compact + full) // 2
+    with contextlib.redirect_stdout(io.StringIO()):
+        mid = cs.report_messages({"BTC": analysis}, assets, comments=comments)[0]
+    assert len(mid) <= cs.MAX_REPORT_CHARS and "Grafik Yorumu" in mid and len(mid) == compact, "kısa yorum sürümü seçilmeli"
+    cs.MAX_REPORT_CHARS = (bare + compact) // 2
+    with contextlib.redirect_stdout(io.StringIO()):
+        low = cs.report_messages({"BTC": analysis}, assets, comments=comments)[0]
+    assert "Grafik Yorumu" not in low and len(low) == bare, "kısa sürüm de sığmazsa yorum atlanır, rapor gider"
+    cs.MAX_REPORT_CHARS = bare - 1
+    try:
+        cs.report_messages({"BTC": analysis}, assets, comments=comments)
+        assert False
+    except ValueError:
+        pass
+finally:
+    cs.MAX_REPORT_CHARS = original_limit
+assert cs.report_messages({"BTC": analysis}, assets, comments={"BTC": "tek metin"})[0].count("tek metin") == 1, "düz metin de kabul edilir"
+
+# birden çok varlık: her coinin kendi yorumu, kendi adıyla
+other = {"ticker": "TST1", "name": "Test", "symbol": "TST1/USDT", "since": "2018-01-01"}
+multi_msgs, _ = run_comment({**cfg, "assets": [*cfg["assets"], other], "chart_comment": {**real_chart_comment, "timeframes": ["4h"]}})
+assert len(multi_msgs) == 1 and "Bitcoin şu an 4 saatlik grafikte" in multi_msgs[0] and "Test şu an 4 saatlik grafikte" in multi_msgs[0]
+assert multi_msgs[0].count("Teknik analiz kesinlik taşımaz") == 2
+
+# bozuk state.json (Git çakışma işaretleri) rapor akışını durdurmaz
+conflict = ('{\n<<<<<<< HEAD\n  "last_report": "2026-11-10",\n=======\n  "last_report": "2026-11-10",\n>>>>>>> aa6fb24 (19-11-2026)\n'
+            '  "news_hist": {\n    "2026-11-13": {"_total": 45}\n  }\n}\n')
+with tempfile.TemporaryDirectory() as tmp4:
+    path = Path(tmp4) / "state.json"
+    assert cs.load_state(path) == {}
+    path.write_text('{"last_report": "2026-11-18", "x": 1}', encoding="utf-8")
+    assert cs.load_state(path) == {"last_report": "2026-11-18", "x": 1}
+    path.write_text(conflict, encoding="utf-8")
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        recovered = cs.load_state(path)
+    assert recovered == {"last_report": "2026-11-10", "news_hist": {"2026-11-13": {"_total": 45}}} and "çakışma işaretleri temizlendi" in out.getvalue()
+    assert not list(Path(tmp4).glob("*.bozuk")), "kurtarılabilen dosya yedeklenmez"
+    for hopeless in ("{ bozuk json", "[1, 2, 3]", ""):
+        path.write_text(hopeless, encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert cs.load_state(path) == {}
+        assert (Path(tmp4) / "state.json.bozuk").read_text(encoding="utf-8") == hopeless, "kurtarılamayan dosya .bozuk olarak yedeklenir"
+    # uçtan uca: çakışmalı state ile günlük rapor yine gider ve state temiz yazılır
+    path.write_text(conflict.replace("2026-11-10", "2000-01-01"), encoding="utf-8")
+    with contextlib.redirect_stdout(io.StringIO()):
+        end_to_end = cs.run(comment_cfg, sent.append, state_path=path, fetch=fetch, fetch_fg=lambda: fg)
+    assert len(end_to_end) == 1 and "📐 Grafik Yorumu" in end_to_end[0]
+    healed = json.loads(path.read_text(encoding="utf-8"))
+    assert healed["last_report"] != "2000-01-01" and "<<<<<<<" not in path.read_text(encoding="utf-8") and "news_hist" in healed
+    path.write_text("{ tamamen bozuk", encoding="utf-8")
+    with contextlib.redirect_stdout(io.StringIO()):
+        after_reset = cs.run(comment_cfg, sent.append, state_path=path, fetch=fetch, fetch_fg=lambda: fg)
+    assert len(after_reset) == 1 and after_reset[0].startswith("🆕"), "kurtarılamazsa ilk çalışma gibi davranır, rapor gider"
 print("Tüm bildirim testleri geçti ✔")

@@ -172,6 +172,57 @@ Skor geçmişi tablosu tahmin değil, geçmişin tarifidir: bitişik mumların i
 > **Sınırlar:** Aşırı satım, dipte olunduğunu garanti etmez; düşüş trendinde göstergeler uzun süre Dip tarafında kalabilir, güçlü yükselişte uzun süre Şişmiş tarafında kalabilir.
 > Skor dip/tepe tahmini değil, göstergelerin aşırılık durumunun özetidir.
 
+## Grafik Yorumu
+
+Günlük Telegram raporuna, Dip Skoru çubuklarının altına **"📐 Grafik Yorumu"** bölümü eklenir: grafiğin *şu an ne gösterdiğini* anlatan kısa, kural tabanlı
+Türkçe bir metin. **LLM veya harici yapay zeka yoktur ve sistem fiyat tahmini yapmaz.** Varsayılan olarak 4 saatlik ve günlük grafik için ayrı birer paragraf üretilir (aşağıdaki örnekte 4 saatlik paragraf sentetik, günlük paragraf gerçek BTC verisinden):
+
+```
+📐 Grafik Yorumu
+
+Bitcoin şu an 4 saatlik grafikte yatay seyrediyor (belirgin bir yön sinyali yok). Yükselen üçgen formasyonu oluşuyor (bullish): direnç yatay (110), dipler yükseliyor. Güçlü destek: 107, güçlü direnç: 110.
+
+Bitcoin şu an günlük grafikte kararsız bir görünümde (sinyaller birbiriyle çelişiyor). Belirgin bir formasyon tespit edilmedi. Güçlü destek: 75.000, güçlü direnç: 87.300.
+
+ℹ️ Teknik analiz kesinlik taşımaz, yatırım tavsiyesi değildir.
+```
+
+**Nasıl karar verir** (`core/chart_analysis.py`, yalnızca pandas ve numpy; scipy gerekmez):
+
+- **Trend:** 4 sinyal oylanır: EMA50/EMA200 ilişkisi, fiyatın EMA'lara göre yeri, son pivotlarda tepe/dip dizilimi (HH/HL, LH/LL) ve lineer regresyon eğimi. En az 3 sinyal aynı yönü
+  göstermeli ve hiçbiri ters olmamalı; aksi halde yön **verilmez** ("yatay", çelişki varsa "kararsız").
+- **Destek/direnç:** Pivot tepe ve dipler fiyat yüzdesiyle (varsayılan %0,5) kümelenir; küme dokunuş sayısı, yenilik ve hacimle skorlanır. Fiyatın altındaki en güçlü küme destek,
+  üstündeki direnç olur; yoksa "belirgin seviye tespit edilmedi" denir. Fiyattan %25'ten uzak seviyeler raporlanmaz. Güç skoru düşükse "güçlü" denmez.
+- **Formasyon:** yükselen/alçalan/simetrik üçgen, yükselen/düşen kama, çift tepe/dip. Tepeler ve dipler ayrı ayrı doğruya oturtulur; eğim, yakınsama, pivot sayısı (her çizgi için en az 3) ve fiyatın çizgiler
+  içinde kalması kontrol edilir. Her formasyona 0-1 güven skoru verilir; **eşiğin (0,72) altındakiler raporlanmaz, formasyon uydurulmaz**. Birden çok aday çıkarsa en yüksek skorlu seçilir.
+  Çift tepe/dip için ilk zirveye belirgin bir yükseliş/düşüş gelmiş olmalı ve zirve tam iki kez test edilmiş olmalı (yatay aralık çift formasyon sayılmaz). Bayrak/flama desteklenmiyor.
+
+**Güvenilirlik ölçümü (sentetik veriyle, gerçek piyasa kanıtı değildir):** formasyon içermeyen rastgele fiyat yürüyüşlerinde yanlış formasyon çıkma oranı ortalama **%2,8** (eşikler gevşek bırakılsaydı %9,7 idi);
+bilerek kurulmuş formasyonların tamamı bulunuyor, gürültü 3 kat artsa bile %90-100'ü bulunuyor. Gerçek piyasada formasyonlar bu kadar temiz olmadığı için tespit oranı daha düşük olabilir; belirsiz durumda sistem sessiz kalmayı seçer.
+
+**Veri:** 1d/1w/1M için rapor için zaten çekilen geçmiş yeniden kullanılır. 4 saatlik için mevcut Binance public endpoint çözümüyle (`BINANCE_PUBLIC_URL`) ~600 mum çekilir
+(EMA200 için en az 250 mum gerekir; daha azı "yeterli mum yok" sayılır). Yeni veri kaynağı ve yeni bağımlılık yoktur.
+
+**Hata davranışı:** Bir periyodun verisi alınamaz veya hesap başarısız olursa yalnızca o paragraf "…grafik için yorum üretilemedi (…)" olur; hepsi başarısızsa bölüm "Grafik yorumu şu an üretilemedi."
+yazar. Rapor ve Dip Skoru her durumda normal gider, hata terminale/log'a yazılır. Mesaj 3800 karakteri aşarsa önce kısa yorum sürümü, o da sığmazsa yorum atlanır. Telegram düz metin
+gönderildiği için özel karakter kaçırma gerekmez.
+
+**Eşikleri ayarlama:** `config.yaml` → `chart_comment`:
+
+```yaml
+chart_comment:
+  enabled: true                    # kapatmak için false
+  timeframes: ["4h", "1d"]         # 1h, 2h, 4h, 6h, 12h, 1d, 1w, 1M
+  candles: {"4h": 600}             # ek periyotlar için çekilecek mum sayısı
+  params: {sr_tolerance_pct: 0.7}  # tüm periyotlar için eşik değişikliği
+  timeframe_params:                # yalnızca bir periyot için
+    "4h": {pattern_min_score: 0.8}
+```
+
+Tüm eşikler ve anlamları `core/chart_analysis.py` dosyasının başındaki `DEFAULT_PARAMS` içindedir (kodda gömülü sayı yoktur). En sık ayarlananlar: `pattern_min_score` (yükselt = daha az ama daha emin formasyon),
+`sr_tolerance_pct` (destek/direnç kümeleme genişliği), `sr_max_distance_pct`, `trend_min_agree` (kaç sinyal aynı yönde olmalı), `pivot_order` (pivot hassasiyeti), `pattern_window` (formasyon aranan mum sayısı).
+Bilinmeyen bir eşik adı yazarsan (yazım hatası) bölüm atlanır ve log'a "ayar hatası" yazılır, rapor yine gider.
+
 ## Haftalık RSI alarmı (50 coin)
 
 Bitcoin Dip Skorundan **bağımsız** ayrı bir özelliktir: `config.yaml` içindeki `rsi_scan.coins` listesindeki (varsayılan 50 coin) coinlerin
@@ -265,6 +316,7 @@ python tests/test_scoring.py     # genel skor, nihai etiket, skor geçmişi
 python tests/test_backtest.py
 python tests/test_check.py       # rapor ve durum akışı
 python tests/test_rsi_scan.py    # haftalık RSI alarmı: eşik, mesaj, veri bütünlüğü, zamanlayıcı, kilit, komut satırı
+python tests/test_chart_analysis.py  # grafik yorumu: trend, destek/direnç, formasyonlar, uç durumlar, metin
 python tests/test_news.py
 python tests/test_sentiment.py
 ```
@@ -282,5 +334,6 @@ Hiçbiri internet veya Telegram gerektirmez.
 - `core/sentiment.py`: Fear & Greed endeksi verisi (alternative.me)
 - `core/news.py`: RSS haberlerini UI'da sınıflandırma ve hype analizi
 - `core/notifier.py`: Telegram
+- `core/chart_analysis.py`: grafik yorumu (trend, destek/direnç, formasyon tespiti ve Türkçe metin; saf fonksiyonlar)
 - `core/rsi_scan.py`: haftalık RSI alarmı (tarama, mesaj, durum, kilit, zamanlayıcı) · `scan_rsi.py`: komut satırı
 - `check_signals.py`: rapor ve Telegram akışı · `app.py`: Streamlit paneli

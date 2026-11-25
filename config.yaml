@@ -60,3 +60,12 @@ rsi_scan:
           NEAR, ETC, APT, ICP, ARB, OP, FIL, ATOM, ALGO, VET,
           INJ, POL, RENDER, SEI, FET, STX, PEPE, CRV, GRT, IMX,
           SAND, MANA, THETA, EGLD, FLOW, XTZ, RUNE, LDO, GALA, CHZ]
+
+# GRAFİK YORUMU (günlük rapora, Dip Skoru çubuklarının altına eklenen kural tabanlı Türkçe metin; LLM/harici yapay zeka YOK, tahmin yapmaz)
+# Trend, en güçlü destek/direnç ve (varsa) belirgin bir formasyon (üçgen, kama, çift tepe/dip) anlatılır. Hata olursa rapor yine gider.
+chart_comment:
+  enabled: true
+  timeframes: ["4h", "1d"]    # her biri için ayrı kısa paragraf. 1d/1w/1M için rapor için zaten çekilen geçmiş kullanılır
+  candles: {"4h": 600}        # 4h gibi ek periyotlar için çekilecek mum sayısı (EMA200 için en az ~250 gerekir)
+  params: {}                  # tüm zaman dilimleri için eşik değişiklikleri; anahtarlar core/chart_analysis.py DEFAULT_PARAMS içindedir
+  timeframe_params: {}        # zaman dilimine özel eşikler, örn.  "4h": {sr_tolerance_pct: 0.6, pattern_min_score: 0.75}
