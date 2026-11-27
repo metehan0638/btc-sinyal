@@ -1,68 +1,6 @@
 {
   "last_report": "2026-11-26",
   "news_hist": {
-    "2026-11-13": {
-      "_total": 45,
-      "coin:BTC": 18,
-      "cat:Reg\u00fclasyon / Hukuk": 1,
-      "cat:Borsa / Platform": 10,
-      "cat:ETF / Kurumsal": 4,
-      "coin:XRP": 3,
-      "cat:RWA / Tokenizasyon": 1,
-      "coin:ETH": 5,
-      "coin:SOL": 2,
-      "cat:Memecoin": 1,
-      "coin:DOGE": 1,
-      "coin:SHIB": 1,
-      "cat:DeFi": 2,
-      "coin:AAVE": 2,
-      "coin:HYPE": 4,
-      "cat:Layer-2 / Altyap\u0131": 1,
-      "cat:G\u00fcvenlik / Hack": 2,
-      "cat:Stablecoin / \u00d6deme": 1,
-      "coin:AVAX": 1
-    },
-    "2026-11-12": {
-      "_total": 16,
-      "cat:ETF / Kurumsal": 4,
-      "coin:ETH": 2,
-      "cat:Makro / Ekonomi": 1,
-      "coin:BTC": 6,
-      "cat:Memecoin": 1,
-      "coin:ADA": 1,
-      "coin:SOL": 1,
-      "coin:XRP": 1,
-      "coin:DOGE": 1
-    },
-    "2026-11-11": {
-      "_total": 10,
-      "cat:Stablecoin / \u00d6deme": 1,
-      "coin:BTC": 3,
-      "coin:ETH": 2,
-      "cat:ETF / Kurumsal": 1
-    },
-    "2026-11-10": {
-      "_total": 12,
-      "cat:Makro / Ekonomi": 3,
-      "cat:Borsa / Platform": 3,
-      "cat:ETF / Kurumsal": 1,
-      "coin:BTC": 2
-    },
-    "2026-11-14": {
-      "_total": 19,
-      "cat:ETF / Kurumsal": 3,
-      "coin:BTC": 9,
-      "coin:SHIB": 1,
-      "coin:HYPE": 1,
-      "cat:Stablecoin / \u00d6deme": 1,
-      "coin:DOT": 1,
-      "coin:ETH": 2,
-      "coin:XRP": 1,
-      "coin:AVAX": 1,
-      "coin:SOL": 1,
-      "coin:ADA": 1,
-      "cat:Borsa / Platform": 1
-    },
     "2026-11-15": {
       "_total": 9,
       "coin:BTC": 5,
@@ -118,13 +56,62 @@
     },
     "2026-11-19": {
       "_total": 13,
-      "cat:ETF / Kurumsal": 1,
+      "cat:ETF / Kurumsal": 2,
       "coin:BTC": 4,
       "cat:Yapay Zek\u00e2": 1,
       "coin:ETH": 1,
       "coin:BNB": 1,
       "cat:Stablecoin / \u00d6deme": 1,
-      "coin:USDT": 1
+      "coin:USDT": 1,
+      "cat:Reg\u00fclasyon / Hukuk": 1,
+      "coin:HYPE": 1,
+      "cat:Makro / Ekonomi": 2
+    },
+    "2026-11-25": {
+      "_total": 22,
+      "coin:BTC": 8,
+      "coin:ETH": 4,
+      "cat:Memecoin": 1,
+      "coin:DOGE": 1,
+      "cat:Borsa / Platform": 2,
+      "cat:ETF / Kurumsal": 2,
+      "coin:XRP": 2,
+      "coin:SOL": 2,
+      "cat:Stablecoin / \u00d6deme": 2,
+      "coin:USDT": 1,
+      "cat:DeFi": 1,
+      "coin:AAVE": 1
+    },
+    "2026-11-24": {
+      "_total": 36,
+      "cat:ETF / Kurumsal": 8,
+      "coin:BTC": 19,
+      "cat:Stablecoin / \u00d6deme": 3,
+      "coin:ETH": 4,
+      "cat:Reg\u00fclasyon / Hukuk": 1,
+      "cat:Borsa / Platform": 4,
+      "cat:G\u00fcvenlik / Hack": 2,
+      "coin:USDC": 1,
+      "coin:SOL": 1,
+      "coin:ZEC": 2,
+      "coin:XRP": 1,
+      "coin:ADA": 1
+    },
+    "2026-11-23": {
+      "_total": 13,
+      "cat:Borsa / Platform": 2,
+      "coin:BTC": 7,
+      "coin:ETH": 1,
+      "cat:ETF / Kurumsal": 3
+    },
+    "2026-11-22": {
+      "_total": 1
+    },
+    "2026-11-20": {
+      "_total": 7,
+      "coin:ETH": 1,
+      "coin:BTC": 4,
+      "cat:ETF / Kurumsal": 2
     }
   }
 }
